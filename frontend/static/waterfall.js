@@ -638,16 +638,41 @@ document.querySelectorAll(".band-btn").forEach(b => {
 });
 
 // buttons
-document.getElementById("btn-start-sweep").addEventListener("click", () => {
+// Unmistakable click flash — proves the click reached JS even if the
+// network or backend is slow. If you click and DON'T see this flash,
+// the click never reached the page at all (browser extension blocking
+// it, missed the button, etc).
+function flashClick(el, message) {
+  console.log("[hackrf-web] click:", message, "at", new Date().toISOString());
+  const orig = {
+    background: el.style.background,
+    boxShadow: el.style.boxShadow,
+    transform: el.style.transform,
+  };
+  el.style.background = "#4dd0e1";
+  el.style.boxShadow = "0 0 16px #4dd0e1";
+  el.style.transform = "scale(0.94)";
+  setTimeout(() => {
+    el.style.background = orig.background;
+    el.style.boxShadow = orig.boxShadow;
+    el.style.transform = orig.transform;
+  }, 200);
+}
+
+document.getElementById("btn-start-sweep").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "start_sweep");
   socket.emit("start_sweep", readSweepConfig());
 });
-document.getElementById("btn-stop-sweep").addEventListener("click", () => {
+document.getElementById("btn-stop-sweep").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "stop (sweep)");
   socket.emit("stop");
 });
-document.getElementById("btn-start-decode").addEventListener("click", () => {
+document.getElementById("btn-start-decode").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "start_decode");
   socket.emit("start_decode", readDecodeConfig());
 });
-document.getElementById("btn-stop-decode").addEventListener("click", () => {
+document.getElementById("btn-stop-decode").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "stop (decode)");
   socket.emit("stop");
 });
 
@@ -809,10 +834,12 @@ document.querySelectorAll(".band-btn-cap").forEach(b => {
   });
 });
 
-document.getElementById("btn-start-capture").addEventListener("click", () => {
+document.getElementById("btn-start-capture").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "start_capture");
   socket.emit("start_capture", readCaptureConfig());
 });
-document.getElementById("btn-cancel-capture").addEventListener("click", () => {
+document.getElementById("btn-cancel-capture").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "cancel_capture");
   socket.emit("cancel_capture");
 });
 
@@ -1014,15 +1041,16 @@ function applyAdsbConfigToInputs(c) {
   if (c.rx_lon != null) document.getElementById("adsb_lon").value = c.rx_lon;
 }
 
-document.getElementById("btn-start-adsb").addEventListener("click", () => {
+document.getElementById("btn-start-adsb").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "start_adsb");
   const cfg = readAdsbConfig();
   socket.emit("start_adsb", cfg);
-  // also re-center map if location provided
   if (cfg.rx_lat != null && cfg.rx_lon != null && adsbMap) {
     adsbMap.setView([cfg.rx_lat, cfg.rx_lon], 9);
   }
 });
-document.getElementById("btn-stop-adsb").addEventListener("click", () => {
+document.getElementById("btn-stop-adsb").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "stop (adsb)");
   socket.emit("stop");
 });
 
@@ -1083,13 +1111,15 @@ function applyScanConfigToInputs(c) {
   if (c.rx_lon != null) document.getElementById("scan_lon").value = c.rx_lon;
 }
 
-document.getElementById("btn-start-scan").addEventListener("click", () => {
+document.getElementById("btn-start-scan").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "start_scan");
   resetPhases();
   scanResultsEl.innerHTML = `<div class="event-empty">Scanning… results will appear here phase by phase.</div>`;
   scanFindings = {};
   socket.emit("start_scan", readScanConfig());
 });
-document.getElementById("btn-stop-scan").addEventListener("click", () => {
+document.getElementById("btn-stop-scan").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "stop (scan)");
   socket.emit("stop");
 });
 
