@@ -110,11 +110,11 @@
       <section class="panel">
         <h2>Band Quick-Tune</h2>
         <div class="band-buttons">
-          <button class="band-btn" data-freq="315">315</button>
-          <button class="band-btn" data-freq="345">345</button>
-          <button class="band-btn active" data-freq="433.92">433.92</button>
-          <button class="band-btn" data-freq="868.3">868.3</button>
-          <button class="band-btn" data-freq="915">915</button>
+          <button class="band-btn" data-freq="315"    data-gain="32">315</button>
+          <button class="band-btn" data-freq="345"    data-gain="32">345</button>
+          <button class="band-btn active" data-freq="433.92" data-gain="30">433.92</button>
+          <button class="band-btn" data-freq="868.3"  data-gain="36">868.3</button>
+          <button class="band-btn" data-freq="915"    data-gain="36">915</button>
         </div>
       </section>
 
@@ -173,11 +173,11 @@
       <section class="panel">
         <h2>Band Quick-Tune</h2>
         <div class="band-buttons">
-          <button class="band-btn-cap" data-freq="315">315</button>
-          <button class="band-btn-cap" data-freq="345">345</button>
-          <button class="band-btn-cap active" data-freq="433.92">433.92</button>
-          <button class="band-btn-cap" data-freq="868.3">868.3</button>
-          <button class="band-btn-cap" data-freq="915">915</button>
+          <button class="band-btn-cap" data-freq="315"    data-lna="24" data-vga="32" data-amp="0">315</button>
+          <button class="band-btn-cap" data-freq="345"    data-lna="24" data-vga="32" data-amp="0">345</button>
+          <button class="band-btn-cap active" data-freq="433.92" data-lna="16" data-vga="30" data-amp="0">433.92</button>
+          <button class="band-btn-cap" data-freq="868.3"  data-lna="24" data-vga="32" data-amp="0">868.3</button>
+          <button class="band-btn-cap" data-freq="915"    data-lna="24" data-vga="32" data-amp="0">915</button>
         </div>
       </section>
 
@@ -201,16 +201,17 @@
     <!-- Sweep view -->
     <div class="view" id="view-sweep">
       <div class="presets" id="presets">
-        <button class="chip" data-f0="88"  data-f1="108"  data-bin="100000">FM Broadcast</button>
-        <button class="chip" data-f0="118" data-f1="137"  data-bin="50000">Aircraft</button>
-        <button class="chip" data-f0="144" data-f1="148"  data-bin="25000">2m Ham</button>
-        <button class="chip" data-f0="162" data-f1="163"  data-bin="25000">NOAA Wx</button>
-        <button class="chip" data-f0="420" data-f1="450"  data-bin="50000">70cm Ham</button>
-        <button class="chip" data-f0="433" data-f1="435"  data-bin="25000">ISM 433</button>
-        <button class="chip" data-f0="902" data-f1="928"  data-bin="100000">ISM 915</button>
-        <button class="chip" data-f0="2400" data-f1="2483" data-bin="500000">Wi-Fi 2.4</button>
-        <button class="chip" data-f0="5170" data-f1="5835" data-bin="1000000">Wi-Fi 5</button>
-        <button class="chip" data-f0="88"  data-f1="1000" data-bin="500000">Wideband</button>
+        <button class="chip" data-f0="88"   data-f1="108"  data-bin="100000"   data-lna="0"  data-vga="16" data-amp="0">FM Broadcast</button>
+        <button class="chip" data-f0="118"  data-f1="137"  data-bin="50000"    data-lna="16" data-vga="24" data-amp="0">Aircraft</button>
+        <button class="chip" data-f0="144"  data-f1="148"  data-bin="25000"    data-lna="24" data-vga="32" data-amp="1">2m Ham</button>
+        <button class="chip" data-f0="162"  data-f1="163"  data-bin="25000"    data-lna="24" data-vga="32" data-amp="1">NOAA Wx</button>
+        <button class="chip" data-f0="420"  data-f1="450"  data-bin="50000"    data-lna="24" data-vga="32" data-amp="1">70cm Ham</button>
+        <button class="chip" data-f0="433"  data-f1="435"  data-bin="25000"    data-lna="16" data-vga="30" data-amp="0">ISM 433</button>
+        <button class="chip" data-f0="902"  data-f1="928"  data-bin="100000"   data-lna="24" data-vga="32" data-amp="0">ISM 915</button>
+        <button class="chip" data-f0="2400" data-f1="2483" data-bin="500000"   data-lna="16" data-vga="24" data-amp="0">Wi-Fi 2.4</button>
+        <button class="chip" data-f0="5170" data-f1="5835" data-bin="1000000"  data-lna="32" data-vga="40" data-amp="1">Wi-Fi 5</button>
+        <button class="chip" data-f0="1080" data-f1="1100" data-bin="50000"    data-lna="32" data-vga="40" data-amp="1">ADS-B</button>
+        <button class="chip" data-f0="88"   data-f1="1000" data-bin="500000"   data-lna="16" data-vga="20" data-amp="0">Wideband</button>
       </div>
 
       <div class="canvas-wrap fft-wrap">

@@ -517,21 +517,52 @@ function highlightBandButton(freqMhz) {
   });
 }
 
-// preset chips
+function applyGainsToSweepUI(lna, vga, amp) {
+  document.getElementById("lna").value = lna;
+  document.getElementById("vga").value = vga;
+  document.getElementById("amp").checked = !!amp;
+  document.getElementById("lna_val").textContent = `${lna} dB`;
+  document.getElementById("vga_val").textContent = `${vga} dB`;
+  updateSliderFills(["lna", "vga"]);
+}
+
+function applyGainsToCaptureUI(lna, vga, amp) {
+  document.getElementById("cap_lna").value = lna;
+  document.getElementById("cap_vga").value = vga;
+  document.getElementById("cap_amp").checked = !!amp;
+  document.getElementById("cap_lna_val").textContent = `${lna} dB`;
+  document.getElementById("cap_vga_val").textContent = `${vga} dB`;
+  updateSliderFills(["cap_lna", "cap_vga"]);
+}
+
+// preset chips (sweep mode)
 document.querySelectorAll(".chip").forEach(b => {
   b.addEventListener("click", () => {
     document.getElementById("f_start").value = b.dataset.f0;
     document.getElementById("f_stop").value  = b.dataset.f1;
     document.getElementById("bin_width").value = b.dataset.bin;
+    if (b.dataset.lna != null) {
+      applyGainsToSweepUI(
+        parseInt(b.dataset.lna, 10),
+        parseInt(b.dataset.vga, 10),
+        parseInt(b.dataset.amp || "0", 10) === 1,
+      );
+    }
     highlightPreset(readSweepConfig());
     socket.emit("start_sweep", readSweepConfig());
   });
 });
 
-// band buttons
+// band buttons (decode mode)
 document.querySelectorAll(".band-btn").forEach(b => {
   b.addEventListener("click", () => {
     document.getElementById("dec_freq").value = b.dataset.freq;
+    if (b.dataset.gain != null) {
+      const g = parseInt(b.dataset.gain, 10);
+      document.getElementById("dec_gain").value = g;
+      document.getElementById("dec_gain_val").textContent = `${g} dB`;
+      updateSliderFills(["dec_gain"]);
+    }
     highlightBandButton(parseFloat(b.dataset.freq));
   });
 });
@@ -697,6 +728,13 @@ function applyCaptureConfigToInputs(c) {
 document.querySelectorAll(".band-btn-cap").forEach(b => {
   b.addEventListener("click", () => {
     document.getElementById("cap_freq").value = b.dataset.freq;
+    if (b.dataset.lna != null) {
+      applyGainsToCaptureUI(
+        parseInt(b.dataset.lna, 10),
+        parseInt(b.dataset.vga, 10),
+        parseInt(b.dataset.amp || "0", 10) === 1,
+      );
+    }
     document.querySelectorAll(".band-btn-cap").forEach(x => x.classList.toggle("active", x === b));
   });
 });
