@@ -31,8 +31,9 @@ const paneCapture = document.getElementById("pane-capture");
 const paneAdsb    = document.getElementById("pane-adsb");
 const paneScan    = document.getElementById("pane-scan");
 
-let currentMode  = "sweep";         // UI mode (sweep | decode)
-let serverMode   = "idle";          // backend mode (idle | sweep | decode)
+let currentMode    = "sweep";       // UI tab (sweep | decode | capture | adsb | scan)
+let serverMode     = "idle";        // backend mode (idle | sweep | decode | capture | adsb | scan)
+let prevServerMode = "idle";        // last seen serverMode — used to detect transitions
 let lastSweep    = null;
 let cursorX      = -1;
 let sweepTimestamps = [];
@@ -450,8 +451,34 @@ socket.on("status", (s) => {
   if (s.capture_config) applyCaptureConfigToInputs(s.capture_config);
   if (s.adsb_config) applyAdsbConfigToInputs(s.adsb_config);
   if (s.scan_config) applyScanConfigToInputs(s.scan_config);
+
+  // Visible-feedback when the backend transitions out of a running mode:
+  // wipe whatever the previous mode was painting so the user can SEE
+  // that Stop (or mode switch) actually took effect.
+  if (prevServerMode !== "idle" && serverMode !== prevServerMode) {
+    onServerLeftMode(prevServerMode);
+  }
+  prevServerMode = serverMode;
+
   refreshStatusUI();
 });
+
+function onServerLeftMode(prevMode) {
+  if (prevMode === "sweep")   clearSweepVisuals();
+  if (prevMode === "adsb")    clearAdsbVisuals();
+  // capture/scan have their own dedicated "done" / "stopped" events
+}
+
+function clearAdsbVisuals() {
+  if (adsbMap) {
+    for (const m of adsbMarkers.values()) adsbMap.removeLayer(m);
+    adsbMarkers.clear();
+  }
+  adsbAircraft = [];
+  const statsEl = document.getElementById("adsb-stats");
+  if (statsEl) statsEl.textContent = "0 tracked · 0 with position";
+  if (currentMode === "adsb") renderAircraftList();
+}
 
 socket.on("sweep", (msg) => {
   // If frequency range changed, wipe the canvas so old data doesn't

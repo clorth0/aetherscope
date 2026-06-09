@@ -397,6 +397,8 @@ input[type="checkbox"] {
   transition: all 0.15s;
 }
 .btn:hover { background: #232936; border-color: #353d51; }
+.btn:active { transform: scale(0.97); background: #1a1d24; }
+.chip:active { transform: scale(0.96); }
 .btn.primary {
   background: linear-gradient(180deg, #1c4d52, #0e2c33);
   border-color: var(--accent);
