@@ -10,6 +10,11 @@ const wfCtx = waterfallCanvas.getContext("2d", { willReadFrequently: true });
 
 const statusDot  = document.getElementById("status-dot");
 const statusText = document.getElementById("status-text");
+const devicePill = document.getElementById("device-pill");
+const deviceDot  = document.getElementById("device-dot");
+const deviceText = document.getElementById("device-text");
+const deviceMeta = document.getElementById("device-meta");
+const toastHost  = document.getElementById("toast-host");
 const hoverFreqEl  = document.getElementById("hover-freq");
 const hoverPowerEl = document.getElementById("hover-power");
 const sweepRateEl  = document.getElementById("sweep-rate");
@@ -373,6 +378,48 @@ function refreshStatusUI() {
 // ------------------------------------------------------------------
 // Socket events
 // ------------------------------------------------------------------
+socket.on("device_status", (s) => {
+  const info = s.info;
+  devicePill.classList.remove("connected", "disconnected", "probing");
+  deviceDot.classList.remove("running", "stopped", "warn");
+  if (info && info.serial) {
+    devicePill.classList.add("connected");
+    deviceDot.classList.add("running");
+    deviceText.textContent = "HackRF";
+    const tail = info.serial.slice(-6).toUpperCase();
+    const fw = info.firmware ? ` · fw ${info.firmware}` : "";
+    deviceMeta.textContent = `${tail}${fw}`;
+    devicePill.title = `Serial: ${info.serial}\nBoard: ${info.board || "?"}\nFirmware: ${info.firmware || "?"}\nClick to re-probe`;
+  } else {
+    devicePill.classList.add("disconnected");
+    deviceDot.classList.add("stopped");
+    deviceText.textContent = "No HackRF";
+    deviceMeta.textContent = "";
+    devicePill.title = "HackRF not detected. Plug it in directly to the Mac mini, not through a hub. Click to re-probe.";
+  }
+});
+
+socket.on("toast", (t) => {
+  showToast(t.level || "info", t.message || "");
+});
+
+devicePill.addEventListener("click", () => socket.emit("refresh_device"));
+
+function showToast(level, message) {
+  const el = document.createElement("div");
+  el.className = `toast ${level}`;
+  el.textContent = message;
+  toastHost.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("leaving");
+    setTimeout(() => el.remove(), 220);
+  }, 5000);
+  el.addEventListener("click", () => {
+    el.classList.add("leaving");
+    setTimeout(() => el.remove(), 220);
+  });
+}
+
 socket.on("status", (s) => {
   serverMode = s.mode || "idle";
   if (s.sweep_config) applySweepConfigToInputs(s.sweep_config);

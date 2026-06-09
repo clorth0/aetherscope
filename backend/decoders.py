@@ -28,12 +28,19 @@ class DecodeConfig:
 
 
 DecodeCallback = Callable[[dict], None]
+ExitCallback   = Callable[[str], None]   # reason: "stopped" | "died"
 
 
 class Rtl433Decoder:
-    def __init__(self, config: DecodeConfig, on_event: DecodeCallback):
+    def __init__(
+        self,
+        config: DecodeConfig,
+        on_event: DecodeCallback,
+        on_exit: ExitCallback | None = None,
+    ):
         self.config = config
         self.on_event = on_event
+        self.on_exit = on_exit
         self._proc: subprocess.Popen | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -100,3 +107,9 @@ class Rtl433Decoder:
                 log.exception("on_event callback failed")
 
         log.info("rtl_433 decoder exiting")
+        if self.on_exit:
+            reason = "stopped" if self._stop.is_set() else "died"
+            try:
+                self.on_exit(reason)
+            except Exception:
+                log.exception("on_exit callback failed")

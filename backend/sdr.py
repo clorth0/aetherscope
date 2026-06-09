@@ -31,15 +31,23 @@ class SweepConfig:
 
 
 SweepCallback = Callable[[np.ndarray, np.ndarray], None]
+ExitCallback  = Callable[[str], None]   # reason: "stopped" | "died"
 
 
 class SweepStreamer:
-    def __init__(self, config: SweepConfig, on_sweep: SweepCallback):
+    def __init__(
+        self,
+        config: SweepConfig,
+        on_sweep: SweepCallback,
+        on_exit: ExitCallback | None = None,
+    ):
         self.config = config
         self.on_sweep = on_sweep
+        self.on_exit = on_exit
         self._proc: subprocess.Popen | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._got_data = False
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -112,8 +120,15 @@ class SweepStreamer:
             for i, p in enumerate(powers):
                 f = int(hz_low + i * bin_width)
                 accumulators[f] = p
+            self._got_data = True
 
         log.info("sweep streamer exiting")
+        if self.on_exit:
+            reason = "stopped" if self._stop.is_set() else "died"
+            try:
+                self.on_exit(reason)
+            except Exception:
+                log.exception("on_exit callback failed")
 
     def _emit(self, accumulators: dict[int, float]) -> None:
         freqs = np.fromiter(sorted(accumulators.keys()), dtype=np.float64)

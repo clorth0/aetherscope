@@ -13,6 +13,11 @@
     <span class="logo-mark"></span>
     <span class="logo-text">hackrf<span class="logo-dim">-web</span></span>
   </div>
+  <button class="device-pill" id="device-pill" title="Click to re-probe">
+    <span class="dot stopped" id="device-dot"></span>
+    <span class="device-text" id="device-text">Probing…</span>
+    <span class="device-meta" id="device-meta"></span>
+  </button>
   <nav class="mode-tabs" id="mode-tabs">
     <button class="mode-tab active" data-mode="sweep">Sweep</button>
     <button class="mode-tab" data-mode="decode">Decode</button>
@@ -36,6 +41,8 @@
     <span id="status-text" class="status-text">Idle</span>
   </div>
 </header>
+
+<div id="toast-host"></div>
 
 <main class="layout">
 

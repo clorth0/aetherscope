@@ -85,6 +85,84 @@ html, body {
 
 .topbar-spacer { flex: 1; }
 
+/* device pill */
+.device-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px 5px 10px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg);
+  font: 600 12px var(--ui);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.device-pill:hover {
+  background: var(--bg-2);
+  border-color: var(--border-strong);
+}
+.device-text {
+  letter-spacing: 0.02em;
+}
+.device-meta {
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  font-size: 11px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.device-pill.disconnected .device-text { color: var(--bad); }
+.device-pill.connected    .device-text { color: var(--good); }
+.device-pill.probing      .device-text { color: var(--warn); }
+.dot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 0 var(--warn);
+  animation: pulse-warn 1.2s ease-out infinite;
+}
+@keyframes pulse-warn {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 179, 0, 0.5); }
+  100% { box-shadow: 0 0 0 6px rgba(255, 179, 0, 0); }
+}
+
+/* toast notifications */
+#toast-host {
+  position: fixed;
+  top: calc(var(--topbar-h) + 14px);
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  min-width: 260px;
+  max-width: 420px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-left-width: 4px;
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  animation: toast-in 0.18s ease-out;
+}
+.toast.info  { border-left-color: var(--accent); }
+.toast.warn  { border-left-color: var(--warn); }
+.toast.error { border-left-color: var(--bad); }
+.toast.leaving { opacity: 0; transform: translateX(10px); transition: all 0.2s; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
 /* mode tabs */
 .mode-tabs {
   display: flex;
