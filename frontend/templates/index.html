@@ -7,30 +7,96 @@
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
-<header>
-  <h1>hackrf-web</h1>
-  <span id="status" class="status-dot stopped" title="stopped"></span>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo-mark"></span>
+    <span class="logo-text">hackrf<span class="logo-dim">-web</span></span>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="stat">
+    <span class="stat-label">Sweep</span>
+    <span id="sweep-rate" class="stat-value">0.0 Hz</span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">Cursor</span>
+    <span id="hover-freq" class="stat-value">— MHz</span>
+    <span id="hover-power" class="stat-value dim">— dB</span>
+  </div>
+  <div class="status">
+    <span id="status-dot" class="dot stopped"></span>
+    <span id="status-text" class="status-text">Stopped</span>
+  </div>
 </header>
 
-<section id="controls">
-  <label>Start MHz <input id="f_start" type="number" value="88" min="1" max="6000" /></label>
-  <label>Stop MHz <input id="f_stop" type="number" value="1000" min="1" max="6000" /></label>
-  <label>Bin Hz <input id="bin_width" type="number" value="500000" min="1000" step="1000" /></label>
-  <label>LNA <input id="lna" type="number" value="16" min="0" max="40" step="8" /></label>
-  <label>VGA <input id="vga" type="number" value="20" min="0" max="62" step="2" /></label>
-  <label>Amp <input id="amp" type="checkbox" /></label>
-  <button id="btn-start">Start</button>
-  <button id="btn-stop">Stop</button>
-</section>
+<main class="layout">
 
-<section id="readout">
-  <span id="hover-freq">—</span>
-  <span id="hover-power">—</span>
-  <span id="sweep-rate">0 Hz</span>
-</section>
+  <aside class="sidebar">
+    <section class="panel">
+      <h2>Range</h2>
+      <div class="row">
+        <label>Start <span class="unit">MHz</span></label>
+        <input id="f_start" type="number" value="88" min="1" max="6000" />
+      </div>
+      <div class="row">
+        <label>Stop <span class="unit">MHz</span></label>
+        <input id="f_stop" type="number" value="1000" min="1" max="6000" />
+      </div>
+      <div class="row">
+        <label>Bin <span class="unit">Hz</span></label>
+        <input id="bin_width" type="number" value="500000" min="1000" step="1000" />
+      </div>
+    </section>
 
-<canvas id="fft" width="1200" height="180"></canvas>
-<canvas id="waterfall" width="1200" height="500"></canvas>
+    <section class="panel">
+      <h2>Gain</h2>
+      <div class="row slider-row">
+        <label>LNA <span id="lna_val" class="unit">16 dB</span></label>
+        <input id="lna" type="range" value="16" min="0" max="40" step="8" />
+      </div>
+      <div class="row slider-row">
+        <label>VGA <span id="vga_val" class="unit">20 dB</span></label>
+        <input id="vga" type="range" value="20" min="0" max="62" step="2" />
+      </div>
+      <div class="row check-row">
+        <label for="amp">Amp <span class="unit">+14 dB</span></label>
+        <input id="amp" type="checkbox" />
+      </div>
+    </section>
+
+    <section class="panel actions">
+      <button id="btn-start" class="btn primary">▶ Start</button>
+      <button id="btn-stop" class="btn ghost">■ Stop</button>
+    </section>
+  </aside>
+
+  <section class="main">
+
+    <div class="presets" id="presets">
+      <button class="chip" data-f0="88"  data-f1="108"  data-bin="100000">FM Broadcast</button>
+      <button class="chip" data-f0="118" data-f1="137"  data-bin="50000">Aircraft</button>
+      <button class="chip" data-f0="144" data-f1="148"  data-bin="25000">2m Ham</button>
+      <button class="chip" data-f0="162" data-f1="163"  data-bin="25000">NOAA Wx</button>
+      <button class="chip" data-f0="420" data-f1="450"  data-bin="50000">70cm Ham</button>
+      <button class="chip" data-f0="433" data-f1="435"  data-bin="25000">ISM 433</button>
+      <button class="chip" data-f0="902" data-f1="928"  data-bin="100000">ISM 915</button>
+      <button class="chip" data-f0="2400" data-f1="2483" data-bin="500000">Wi-Fi 2.4</button>
+      <button class="chip" data-f0="5170" data-f1="5835" data-bin="1000000">Wi-Fi 5</button>
+      <button class="chip" data-f0="88"  data-f1="1000" data-bin="500000">Wideband</button>
+    </div>
+
+    <div class="canvas-wrap fft-wrap">
+      <canvas id="fft"></canvas>
+      <div class="cv-label">Spectrum</div>
+    </div>
+    <div class="canvas-wrap waterfall-wrap">
+      <canvas id="waterfall"></canvas>
+      <div class="cv-label">Waterfall</div>
+    </div>
+
+  </section>
+
+</main>
 
 <script src="{{ url_for('static', filename='waterfall.js') }}"></script>
 </body>
