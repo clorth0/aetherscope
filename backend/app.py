@@ -94,7 +94,34 @@ _device: dict = {"info": None, "checked_at": 0.0}
 # Emitters
 # ------------------------------------------------------------------
 
+# Sweep rate-limit. hackrf_sweep on narrow bands can produce hundreds
+# of full sweeps per second. Without throttling we chunk-emit 4+ MB/s
+# of JSON over the websocket and the browser tab becomes unresponsive
+# (page loads stall, clicks lag). We render at most _SWEEP_EMIT_HZ
+# events per second to the wire, while counting all sweeps for the
+# rate display so the user sees the true device rate.
+_SWEEP_EMIT_HZ = 30.0
+_SWEEP_MIN_DT = 1.0 / _SWEEP_EMIT_HZ
+_sweep_emit_lock = threading.Lock()
+_sweep_last_emit = 0.0
+_sweep_recent: list[float] = []
+
+
 def _emit_sweep(freqs: np.ndarray, powers: np.ndarray) -> None:
+    global _sweep_last_emit
+    now = time.time()
+    with _sweep_emit_lock:
+        _sweep_recent.append(now)
+        # window for rate calc: 2 seconds
+        cutoff = now - 2.0
+        while _sweep_recent and _sweep_recent[0] < cutoff:
+            _sweep_recent.pop(0)
+        rate_hz = len(_sweep_recent) / 2.0
+
+        if now - _sweep_last_emit < _SWEEP_MIN_DT:
+            return
+        _sweep_last_emit = now
+
     socketio.emit(
         "sweep",
         {
@@ -102,6 +129,7 @@ def _emit_sweep(freqs: np.ndarray, powers: np.ndarray) -> None:
             "f1": float(freqs[-1]),
             "bin_width": float(freqs[1] - freqs[0]) if len(freqs) > 1 else 0.0,
             "powers": powers.tolist(),
+            "rate_hz": rate_hz,
         },
     )
 

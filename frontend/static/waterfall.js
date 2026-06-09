@@ -481,8 +481,6 @@ function clearAdsbVisuals() {
 }
 
 socket.on("sweep", (msg) => {
-  // If frequency range changed, wipe the canvas so old data doesn't
-  // pretend to represent the new range.
   const rangeChanged = !lastSweep
     || Math.abs(lastSweep.f0 - msg.f0) > 1
     || Math.abs(lastSweep.f1 - msg.f1) > 1;
@@ -495,7 +493,13 @@ socket.on("sweep", (msg) => {
     drawFFT(msg.powers);
     pushWaterfallRow(msg.powers);
   }
-  updateSweepRate();
+  // Prefer the backend's true rate (it counts every sweep before
+  // rate-limiting); fall back to local timestamps if absent.
+  if (typeof msg.rate_hz === "number") {
+    sweepRateEl.textContent = `${msg.rate_hz.toFixed(1)} Hz`;
+  } else {
+    updateSweepRate();
+  }
 });
 
 socket.on("decoded", (ev) => {
