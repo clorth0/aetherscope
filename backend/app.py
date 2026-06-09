@@ -22,6 +22,7 @@ from .adsb import AdsbConfig, AdsbReceiver
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, delete_capture, list_captures
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
+from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -39,15 +40,17 @@ socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=[])
 DEVICE_POLL_INTERVAL = 2.5
 
 _state: dict = {
-    "mode": "idle",             # "idle" | "sweep" | "decode" | "capture" | "adsb"
+    "mode": "idle",             # "idle" | "sweep" | "decode" | "capture" | "adsb" | "scan"
     "streamer": None,
     "decoder": None,
     "capture": None,
     "adsb": None,
+    "scanner": None,
     "sweep_config": SweepConfig(),
     "decode_config": DecodeConfig(),
     "capture_config": CaptureConfig(),
     "adsb_config": AdsbConfig(),
+    "scan_config": ScanConfig(),
 }
 _device: dict = {"info": None, "checked_at": 0.0}
 
@@ -81,6 +84,7 @@ def _emit_status() -> None:
             "decode_config": asdict(_state["decode_config"]),
             "capture_config": asdict(_state["capture_config"]),
             "adsb_config": asdict(_state["adsb_config"]),
+            "scan_config": _state["scan_config"].__dict__,
         },
     )
 
@@ -113,6 +117,10 @@ def _emit_adsb(aircraft: list[dict], meta: dict) -> None:
     socketio.emit("adsb", {"aircraft": aircraft, "meta": meta})
 
 
+def _emit_scan(name: str, payload: dict) -> None:
+    socketio.emit(name, payload)
+
+
 # ------------------------------------------------------------------
 # Job control
 # ------------------------------------------------------------------
@@ -130,6 +138,9 @@ def _stop_all() -> None:
     if _state["adsb"]:
         _state["adsb"].stop()
         _state["adsb"] = None
+    if _state["scanner"]:
+        _state["scanner"].stop()
+        _state["scanner"] = None
     _state["mode"] = "idle"
 
 
@@ -190,6 +201,28 @@ def _start_decode(cfg: DecodeConfig) -> bool:
     decoder.start()
     _state["decoder"] = decoder
     _state["mode"] = "decode"
+    return True
+
+
+def _start_scan(cfg: ScanConfig) -> bool:
+    if _device["info"] is None:
+        _emit_toast("error", "Cannot start: HackRF not detected.")
+        return False
+    _stop_all()
+    _state["scan_config"] = cfg
+
+    def on_scan_event(name: str, payload: dict) -> None:
+        if name == "scan_completed" or name == "scan_failed":
+            _state["scanner"] = None
+            if _state["mode"] == "scan":
+                _state["mode"] = "idle"
+                _emit_status()
+        _emit_scan(name, payload)
+
+    scanner = AutoScanner(cfg, on_event=on_scan_event)
+    scanner.start()
+    _state["scanner"] = scanner
+    _state["mode"] = "scan"
     return True
 
 
@@ -281,6 +314,7 @@ def on_connect():
         "decode_config": asdict(_state["decode_config"]),
         "capture_config": asdict(_state["capture_config"]),
         "adsb_config": asdict(_state["adsb_config"]),
+        "scan_config": _state["scan_config"].__dict__,
     })
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
     emit("captures", {"items": list_captures()})
@@ -312,6 +346,13 @@ def on_start_capture(data):
 @socketio.on("start_adsb")
 def on_start_adsb(data):
     if _start_adsb(AdsbConfig(**_filter_payload(data, AdsbConfig))):
+        _emit_status()
+
+
+@socketio.on("start_scan")
+def on_start_scan(data):
+    cfg = ScanConfig(**_filter_payload(data, ScanConfig))
+    if _start_scan(cfg):
         _emit_status()
 
 

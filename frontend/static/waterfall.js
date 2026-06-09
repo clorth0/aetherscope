@@ -24,10 +24,12 @@ const viewSweep   = document.getElementById("view-sweep");
 const viewDecode  = document.getElementById("view-decode");
 const viewCapture = document.getElementById("view-capture");
 const viewAdsb    = document.getElementById("view-adsb");
+const viewScan    = document.getElementById("view-scan");
 const paneSweep   = document.getElementById("pane-sweep");
 const paneDecode  = document.getElementById("pane-decode");
 const paneCapture = document.getElementById("pane-capture");
 const paneAdsb    = document.getElementById("pane-adsb");
+const paneScan    = document.getElementById("pane-scan");
 
 let currentMode  = "sweep";         // UI mode (sweep | decode)
 let serverMode   = "idle";          // backend mode (idle | sweep | decode)
@@ -54,10 +56,12 @@ function setMode(mode) {
   viewDecode.hidden  = mode !== "decode";
   viewCapture.hidden = mode !== "capture";
   viewAdsb.hidden    = mode !== "adsb";
+  viewScan.hidden    = mode !== "scan";
   paneSweep.hidden   = mode !== "sweep";
   paneDecode.hidden  = mode !== "decode";
   paneCapture.hidden = mode !== "capture";
   paneAdsb.hidden    = mode !== "adsb";
+  paneScan.hidden    = mode !== "scan";
   document.querySelectorAll(".mode-tab").forEach(t => {
     t.classList.toggle("active", t.dataset.mode === mode);
   });
@@ -383,6 +387,7 @@ function refreshStatusUI() {
   else if (serverMode === "decode") statusText.textContent = "Decoding";
   else if (serverMode === "capture") statusText.textContent = "Recording";
   else if (serverMode === "adsb") statusText.textContent = "Tracking";
+  else if (serverMode === "scan") statusText.textContent = "Auto-Scanning";
   else statusText.textContent = "Idle";
   if (serverMode !== "sweep") sweepRateEl.textContent = "0.0 Hz";
 }
@@ -438,6 +443,7 @@ socket.on("status", (s) => {
   if (s.decode_config) applyDecodeConfigToInputs(s.decode_config);
   if (s.capture_config) applyCaptureConfigToInputs(s.capture_config);
   if (s.adsb_config) applyAdsbConfigToInputs(s.adsb_config);
+  if (s.scan_config) applyScanConfigToInputs(s.scan_config);
   refreshStatusUI();
 });
 
@@ -970,6 +976,175 @@ socket.on("adsb", (msg) => {
     renderAircraftList();
   }
 });
+
+// ------------------------------------------------------------------
+// Auto-scan mode
+// ------------------------------------------------------------------
+const scanResultsEl = document.getElementById("scan-results");
+let scanFindings = {};
+
+function setPhaseState(phase, state) {
+  const row = document.querySelector(`.scan-phase[data-phase="${phase}"]`);
+  if (!row) return;
+  row.classList.remove("active", "done");
+  if (state) row.classList.add(state);
+}
+function setPhaseProgress(phase, pct, elapsed, duration) {
+  const row = document.querySelector(`.scan-phase[data-phase="${phase}"]`);
+  if (!row) return;
+  row.querySelector(".scan-phase-fill").style.width = `${Math.min(100, pct).toFixed(1)}%`;
+  row.querySelector(".scan-phase-stat").textContent = elapsed != null
+    ? `${elapsed.toFixed(1)}s / ${duration.toFixed(0)}s`
+    : "";
+}
+function resetPhases() {
+  document.querySelectorAll(".scan-phase").forEach(r => {
+    r.classList.remove("active", "done");
+    r.querySelector(".scan-phase-fill").style.width = "0%";
+    r.querySelector(".scan-phase-stat").textContent = "—";
+  });
+}
+
+function readScanConfig() {
+  const lat = parseFloat(document.getElementById("scan_lat").value);
+  const lon = parseFloat(document.getElementById("scan_lon").value);
+  return {
+    sweep_seconds: parseFloat(document.getElementById("scan_sweep_s").value),
+    rtl433_seconds: parseFloat(document.getElementById("scan_rtl_s").value),
+    adsb_seconds: parseFloat(document.getElementById("scan_adsb_s").value),
+    peak_threshold_db: parseFloat(document.getElementById("scan_thresh").value),
+    rx_lat: Number.isFinite(lat) ? lat : null,
+    rx_lon: Number.isFinite(lon) ? lon : null,
+  };
+}
+function applyScanConfigToInputs(c) {
+  document.getElementById("scan_sweep_s").value = c.sweep_seconds;
+  document.getElementById("scan_rtl_s").value   = c.rtl433_seconds;
+  document.getElementById("scan_adsb_s").value  = c.adsb_seconds;
+  document.getElementById("scan_thresh").value  = c.peak_threshold_db;
+  if (c.rx_lat != null) document.getElementById("scan_lat").value = c.rx_lat;
+  if (c.rx_lon != null) document.getElementById("scan_lon").value = c.rx_lon;
+}
+
+document.getElementById("btn-start-scan").addEventListener("click", () => {
+  resetPhases();
+  scanResultsEl.innerHTML = `<div class="event-empty">Scanning… results will appear here phase by phase.</div>`;
+  scanFindings = {};
+  socket.emit("start_scan", readScanConfig());
+});
+document.getElementById("btn-stop-scan").addEventListener("click", () => {
+  socket.emit("stop");
+});
+
+socket.on("scan_started", () => { resetPhases(); });
+socket.on("phase_started", (p) => {
+  setPhaseState(p.phase, "active");
+  setPhaseProgress(p.phase, 0, 0, p.duration_s);
+});
+socket.on("phase_progress", (p) => {
+  setPhaseProgress(p.phase, p.pct, p.elapsed_s, p.duration_s);
+});
+socket.on("phase_completed", (p) => {
+  setPhaseProgress(p.phase, 100, p.findings?.duration_s, p.findings?.duration_s);
+  setPhaseState(p.phase, "done");
+  scanFindings[p.phase] = p.findings || {};
+  renderScanResults(false, scanFindings, null);
+});
+socket.on("scan_completed", (s) => {
+  renderScanResults(true, scanFindings, s);
+});
+socket.on("scan_failed", () => {
+  scanResultsEl.innerHTML = `<div class="event-empty">Scan failed.</div>`;
+});
+
+function fmtFreqHz(hz) {
+  if (hz >= 1e9) return `${(hz / 1e9).toFixed(3)} GHz`;
+  if (hz >= 1e6) return `${(hz / 1e6).toFixed(3)} MHz`;
+  return `${(hz / 1e3).toFixed(1)} kHz`;
+}
+
+function summarizeDeviceFields(d) {
+  const skip = new Set([
+    "_count", "_last_time", "_key", "time", "model", "freq", "freq1", "freq2",
+    "rssi", "snr", "noise", "mod", "channel"
+  ]);
+  const parts = [];
+  for (const [k, v] of Object.entries(d)) {
+    if (skip.has(k)) continue;
+    if (v == null) continue;
+    parts.push(`${k}=${v}`);
+    if (parts.length >= 5) break;
+  }
+  return parts.join("  ");
+}
+
+function renderScanResults(isFinal, findings, summary) {
+  const sections = [];
+
+  if (isFinal && summary?.summary) {
+    const s = summary.summary;
+    sections.push(`<div class="scan-summary">
+      <div><div class="num">${s.peak_count}</div><span class="lbl">Spectrum peaks</span></div>
+      <div><div class="num">${s.ism_433_devices}</div><span class="lbl">ISM 433 devices</span></div>
+      <div><div class="num">${s.ism_915_devices}</div><span class="lbl">ISM 915 devices</span></div>
+      <div><div class="num">${s.aircraft_count}</div><span class="lbl">Aircraft</span></div>
+    </div>`);
+  }
+
+  // Peaks
+  const peaks = findings.sweep?.peaks || [];
+  sections.push(`<div class="scan-section">
+    <h3>Spectrum Peaks (${peaks.length})</h3>
+    ${peaks.length === 0
+      ? `<div class="empty">No peaks above threshold yet.</div>`
+      : peaks.map(p => `
+        <div class="peak-row">
+          <span class="freq">${fmtFreqHz(p.center_hz)}</span>
+          <span class="band">${p.band}${p.decoder_hint ? ` <span class="hint-dec">→ ${p.decoder_hint}</span>` : ""}</span>
+          <span class="snr">${p.snr_db.toFixed(1)} dB</span>
+          <span class="snr">${(p.peak_db).toFixed(1)} dBFS</span>
+        </div>`).join("")
+    }
+  </div>`);
+
+  // ISM 433 devices
+  for (const key of ["rtl433_433", "rtl433_915"]) {
+    const phase = findings[key];
+    const devices = phase?.devices || [];
+    const label = key === "rtl433_433" ? "ISM 433 Devices" : "ISM 915 Devices";
+    sections.push(`<div class="scan-section">
+      <h3>${label} (${devices.length})</h3>
+      ${devices.length === 0
+        ? `<div class="empty">No devices decoded.</div>`
+        : devices.map(d => `
+          <div class="scan-device-row">
+            <span class="model">${d.model || "unknown"}</span>
+            <span class="fields">${summarizeDeviceFields(d)}</span>
+            <span class="count">×${d._count}</span>
+          </div>`).join("")
+      }
+    </div>`);
+  }
+
+  // Aircraft
+  const aircraft = findings.adsb?.aircraft || [];
+  sections.push(`<div class="scan-section">
+    <h3>Aircraft (${aircraft.length})</h3>
+    ${aircraft.length === 0
+      ? `<div class="empty">No aircraft tracked.</div>`
+      : aircraft.map(a => `
+        <div class="scan-ac-row">
+          <span class="hex">${(a.hex || "").toUpperCase()}</span>
+          <span class="flight">${(a.flight || "").trim() || "—"}</span>
+          <span class="alt">${a.alt_baro != null ? a.alt_baro + " ft" : "—"}</span>
+          <span class="spd">${a.gs != null ? Math.round(a.gs) + " kts" : "—"}</span>
+          <span class="pos">${a.lat != null ? a.lat.toFixed(3) + ", " + a.lon.toFixed(3) : "no position"}</span>
+        </div>`).join("")
+    }
+  </div>`);
+
+  scanResultsEl.innerHTML = sections.join("");
+}
 
 // initial
 setMode("sweep");
