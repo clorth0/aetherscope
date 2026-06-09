@@ -454,6 +454,15 @@ socket.on("status", (s) => {
 });
 
 socket.on("sweep", (msg) => {
+  // If frequency range changed, wipe the canvas so old data doesn't
+  // pretend to represent the new range.
+  const rangeChanged = !lastSweep
+    || Math.abs(lastSweep.f0 - msg.f0) > 1
+    || Math.abs(lastSweep.f1 - msg.f1) > 1;
+  if (rangeChanged && currentMode === "sweep") {
+    const wr = waterfallCanvas.getBoundingClientRect();
+    wfCtx.clearRect(0, 0, wr.width, wr.height);
+  }
   lastSweep = { f0: msg.f0, f1: msg.f1, powers: msg.powers };
   if (currentMode === "sweep") {
     drawFFT(msg.powers);
@@ -554,20 +563,9 @@ function applyGainsToCaptureUI(lna, vga, amp) {
   updateSliderFills(["cap_lna", "cap_vga"]);
 }
 
-// Debounce helper — coalesce rapid clicks into a single backend call.
-// Without this, accidental double-clicks tear down + restart the HackRF
-// subprocess multiple times in a row, which is slow and sometimes leaks.
-function debounce(fn, ms) {
-  let timer = null;
-  return (...args) => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { timer = null; fn(...args); }, ms);
-  };
-}
-
-const emitStartSweep = debounce(() => socket.emit("start_sweep", readSweepConfig()), 250);
-
-// preset chips (sweep mode)
+// preset chips (sweep mode) — no debounce: the backend state lock
+// serializes rapid clicks safely, and any frontend delay just feels
+// sluggish for a single click.
 document.querySelectorAll(".chip").forEach(b => {
   b.addEventListener("click", () => {
     document.getElementById("f_start").value = b.dataset.f0;
@@ -581,9 +579,22 @@ document.querySelectorAll(".chip").forEach(b => {
       );
     }
     highlightPreset(readSweepConfig());
-    emitStartSweep();
+    // Clear the spectrum/waterfall immediately so the user can SEE the
+    // switch happened instead of staring at old data for ~50ms.
+    clearSweepVisuals();
+    socket.emit("start_sweep", readSweepConfig());
   });
 });
+
+function clearSweepVisuals() {
+  lastSweep = null;
+  const fr = fftCanvas.getBoundingClientRect();
+  fftCtx.clearRect(0, 0, fr.width, fr.height);
+  const wr = waterfallCanvas.getBoundingClientRect();
+  wfCtx.clearRect(0, 0, wr.width, wr.height);
+  hoverFreqEl.textContent  = "— MHz";
+  hoverPowerEl.textContent = "— dB";
+}
 
 // band buttons (decode mode)
 document.querySelectorAll(".band-btn").forEach(b => {
