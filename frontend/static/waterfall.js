@@ -1,4 +1,5 @@
-// hackrf-web — frontend SDR canvas: FFT trace + scrolling waterfall.
+// hackrf-web — frontend SDR canvas: FFT trace, scrolling waterfall,
+// and rtl_433 decoded event log. Two mutually exclusive modes: sweep / decode.
 
 const socket = io();
 
@@ -12,21 +13,50 @@ const statusText = document.getElementById("status-text");
 const hoverFreqEl  = document.getElementById("hover-freq");
 const hoverPowerEl = document.getElementById("hover-power");
 const sweepRateEl  = document.getElementById("sweep-rate");
+const eventCountEl = document.getElementById("event-count");
 
-let lastSweep = null;       // { f0, f1, powers: number[] }
-let cursorX = -1;
+const viewSweep  = document.getElementById("view-sweep");
+const viewDecode = document.getElementById("view-decode");
+const paneSweep  = document.getElementById("pane-sweep");
+const paneDecode = document.getElementById("pane-decode");
+
+let currentMode  = "sweep";         // UI mode (sweep | decode)
+let serverMode   = "idle";          // backend mode (idle | sweep | decode)
+let lastSweep    = null;
+let cursorX      = -1;
 let sweepTimestamps = [];
+let events       = [];
+let eventFilter  = "";
 
-const POWER_MIN = -100;
-const POWER_MAX = -20;
-const FFT_PADDING = { top: 16, right: 14, bottom: 28, left: 64 };
-const WF_PADDING  = { top: 0,  right: 14, bottom: 28, left: 64 };
-const AXIS_FONT   = "12px ui-monospace, 'SF Mono', Menlo, monospace";
-
+const MAX_EVENTS    = 500;
+const POWER_MIN     = -100;
+const POWER_MAX     = -20;
+const FFT_PADDING   = { top: 16, right: 14, bottom: 28, left: 64 };
+const WF_PADDING    = { top: 0,  right: 14, bottom: 28, left: 64 };
+const AXIS_FONT     = "12px ui-monospace, 'SF Mono', Menlo, monospace";
 const DPR = Math.max(window.devicePixelRatio || 1, 1);
 
 // ------------------------------------------------------------------
-// Canvas sizing with DPR awareness
+// Mode switching
+// ------------------------------------------------------------------
+function setMode(mode) {
+  currentMode = mode;
+  viewSweep.hidden  = mode !== "sweep";
+  viewDecode.hidden = mode !== "decode";
+  paneSweep.hidden  = mode !== "sweep";
+  paneDecode.hidden = mode !== "decode";
+  document.querySelectorAll(".mode-tab").forEach(t => {
+    t.classList.toggle("active", t.dataset.mode === mode);
+  });
+  if (mode === "sweep") requestAnimationFrame(fitAll);
+}
+
+document.querySelectorAll(".mode-tab").forEach(tab => {
+  tab.addEventListener("click", () => setMode(tab.dataset.mode));
+});
+
+// ------------------------------------------------------------------
+// Canvas sizing
 // ------------------------------------------------------------------
 function fitCanvas(canvas, ctx) {
   const r = canvas.getBoundingClientRect();
@@ -42,18 +72,15 @@ function cssSize(canvas) {
   const r = canvas.getBoundingClientRect();
   return { w: r.width, h: r.height };
 }
-
 function fitAll() {
   fitCanvas(fftCanvas, fftCtx);
   fitCanvas(waterfallCanvas, wfCtx);
-  // re-render last frame after resize so it doesn't go blank
   if (lastSweep) drawFFT(lastSweep.powers);
 }
-window.addEventListener("resize", fitAll);
-requestAnimationFrame(fitAll);
+window.addEventListener("resize", () => { if (currentMode === "sweep") fitAll(); });
 
 // ------------------------------------------------------------------
-// Viridis-ish colormap (low → high) precomputed LUT
+// Colormap & helpers (sweep view)
 // ------------------------------------------------------------------
 const COLORMAP = (() => {
   const stops = [
@@ -83,23 +110,16 @@ const COLORMAP = (() => {
   }
   return lut;
 })();
-
 function powerToLut(dB) {
   const t = Math.max(0, Math.min(1, (dB - POWER_MIN) / (POWER_MAX - POWER_MIN)));
   return Math.floor(t * 255);
 }
-
-// ------------------------------------------------------------------
-// Frequency formatting
-// ------------------------------------------------------------------
 function fmtFreq(hz) {
   if (hz >= 1e9) return (hz / 1e9).toFixed(3) + " GHz";
   if (hz >= 1e6) return (hz / 1e6).toFixed(3) + " MHz";
   if (hz >= 1e3) return (hz / 1e3).toFixed(1) + " kHz";
   return hz.toFixed(0) + " Hz";
 }
-
-// Pick "nice" tick spacing for an axis
 function niceTicks(min, max, target = 8) {
   const range = max - min;
   const rawStep = range / target;
@@ -115,8 +135,6 @@ function niceTicks(min, max, target = 8) {
   for (let v = start; v <= max + 1e-9; v += step) out.push(v);
   return out;
 }
-
-// Resample a powers[] to a target width using max-pooling (preserves peaks)
 function resampleMax(powers, width) {
   const out = new Float32Array(width);
   if (!powers.length) return out;
@@ -132,27 +150,22 @@ function resampleMax(powers, width) {
 }
 
 // ------------------------------------------------------------------
-// FFT panel render
+// FFT + waterfall draw
 // ------------------------------------------------------------------
 function drawFFT(powers) {
   const { w, h } = cssSize(fftCanvas);
   fftCtx.clearRect(0, 0, w, h);
-
-  // background
   const bg = fftCtx.createLinearGradient(0, 0, 0, h);
   bg.addColorStop(0, "#0a0c10");
   bg.addColorStop(1, "#06080c");
   fftCtx.fillStyle = bg;
   fftCtx.fillRect(0, 0, w, h);
-
   const plot = {
     x: FFT_PADDING.left,
     y: FFT_PADDING.top,
     w: w - FFT_PADDING.left - FFT_PADDING.right,
     h: h - FFT_PADDING.top - FFT_PADDING.bottom,
   };
-
-  // dB grid
   fftCtx.font = AXIS_FONT;
   fftCtx.fillStyle = "#8a93a6";
   fftCtx.textBaseline = "middle";
@@ -169,12 +182,10 @@ function drawFFT(powers) {
   }
   fftCtx.textAlign = "left";
   fftCtx.fillText("dB", plot.x + plot.w + 4, plot.y + 4);
-
-  // freq ticks
   if (lastSweep) {
     fftCtx.textAlign = "center";
     fftCtx.textBaseline = "top";
-    const ticks = niceTicks(lastSweep.f0, lastSweep.f1, Math.max(4, Math.floor(plot.w / 110)));
+    const ticks = niceTicks(lastSweep.f0, lastSweep.f1, Math.max(4, Math.floor(plot.w / 130)));
     for (const f of ticks) {
       const x = plot.x + ((f - lastSweep.f0) / (lastSweep.f1 - lastSweep.f0)) * plot.w;
       fftCtx.strokeStyle = "#171c25";
@@ -186,13 +197,9 @@ function drawFFT(powers) {
       fftCtx.fillText(fmtFreq(f), x, plot.y + plot.h + 6);
     }
   }
-
-  // trace
   if (powers && powers.length) {
     const samples = resampleMax(powers, Math.floor(plot.w));
     const xScale = plot.w / samples.length;
-
-    // glow fill below trace
     const fill = fftCtx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
     fill.addColorStop(0, "rgba(77, 208, 225, 0.35)");
     fill.addColorStop(1, "rgba(77, 208, 225, 0.02)");
@@ -207,8 +214,6 @@ function drawFFT(powers) {
     fftCtx.lineTo(plot.x + plot.w, plot.y + plot.h);
     fftCtx.closePath();
     fftCtx.fill();
-
-    // glow stroke (two-pass: wide soft, narrow crisp)
     fftCtx.shadowBlur = 8;
     fftCtx.shadowColor = "rgba(77, 208, 225, 0.5)";
     fftCtx.strokeStyle = "#4dd0e1";
@@ -224,8 +229,6 @@ function drawFFT(powers) {
     fftCtx.stroke();
     fftCtx.shadowBlur = 0;
   }
-
-  // cursor
   if (cursorX >= 0 && cursorX <= w) {
     fftCtx.strokeStyle = "rgba(255, 255, 255, 0.4)";
     fftCtx.lineWidth = 1;
@@ -236,16 +239,11 @@ function drawFFT(powers) {
     fftCtx.stroke();
     fftCtx.setLineDash([]);
   }
-
-  // border
   fftCtx.strokeStyle = "#171c25";
   fftCtx.lineWidth = 1;
   fftCtx.strokeRect(plot.x + 0.5, plot.y + 0.5, plot.w, plot.h);
 }
 
-// ------------------------------------------------------------------
-// Waterfall: scroll down 1px and paint a new top row
-// ------------------------------------------------------------------
 function pushWaterfallRow(powers) {
   const { w, h } = cssSize(waterfallCanvas);
   const plot = {
@@ -257,19 +255,13 @@ function pushWaterfallRow(powers) {
   const cw = Math.floor(plot.w);
   const ch = Math.floor(plot.h);
   if (cw <= 0 || ch <= 0) return;
-
-  // shift waterfall area down by 1 css px (DPR-correct)
   const sx = Math.floor(plot.x * DPR);
   const sy = Math.floor(plot.y * DPR);
   const sw = Math.floor(cw * DPR);
   const sh = Math.floor(ch * DPR);
-
-  // copy down by 1 css px (DPR rows in device pixels)
   const stride = Math.max(1, Math.floor(DPR));
   const img = wfCtx.getImageData(sx, sy, sw, sh - stride);
   wfCtx.putImageData(img, sx, sy + stride);
-
-  // build the new top row in css coords (DPR px tall)
   const samples = resampleMax(powers, cw);
   const row = wfCtx.createImageData(cw, 1);
   for (let i = 0; i < cw; i++) {
@@ -279,14 +271,11 @@ function pushWaterfallRow(powers) {
     row.data[i * 4 + 2] = COLORMAP[lutIdx * 3 + 2];
     row.data[i * 4 + 3] = 255;
   }
-  // putImageData ignores transform; emulate via temp canvas scaled by DPR
   const tmp = document.createElement("canvas");
   tmp.width = cw;
   tmp.height = 1;
   tmp.getContext("2d").putImageData(row, 0, 0);
   wfCtx.drawImage(tmp, plot.x, plot.y, cw, 1);
-
-  // axis labels on waterfall
   if (lastSweep) {
     wfCtx.clearRect(0, plot.y + plot.h, w, h - plot.y - plot.h);
     wfCtx.font = AXIS_FONT;
@@ -298,22 +287,66 @@ function pushWaterfallRow(powers) {
       const x = plot.x + ((f - lastSweep.f0) / (lastSweep.f1 - lastSweep.f0)) * plot.w;
       wfCtx.fillText(fmtFreq(f), x, plot.y + plot.h + 6);
     }
-    wfCtx.textAlign = "right";
-    wfCtx.textBaseline = "middle";
-    wfCtx.fillText("Hz", plot.x - 6, plot.y + plot.h + 10);
   }
+}
 
-  // cursor over waterfall
-  if (cursorX >= plot.x && cursorX <= plot.x + plot.w) {
-    wfCtx.strokeStyle = "rgba(255, 255, 255, 0.25)";
-    wfCtx.lineWidth = 1;
-    wfCtx.setLineDash([3, 3]);
-    wfCtx.beginPath();
-    wfCtx.moveTo(cursorX + 0.5, plot.y);
-    wfCtx.lineTo(cursorX + 0.5, plot.y + plot.h);
-    wfCtx.stroke();
-    wfCtx.setLineDash([]);
+// ------------------------------------------------------------------
+// Decoded events
+// ------------------------------------------------------------------
+const eventListEl = document.getElementById("event-list");
+const eventFilterEl = document.getElementById("event-filter");
+document.getElementById("btn-clear-events").addEventListener("click", () => {
+  events = [];
+  renderEvents();
+});
+eventFilterEl.addEventListener("input", () => {
+  eventFilter = eventFilterEl.value.trim().toLowerCase();
+  renderEvents();
+});
+
+function eventMatchesFilter(ev) {
+  if (!eventFilter) return true;
+  const blob = JSON.stringify(ev).toLowerCase();
+  return blob.includes(eventFilter);
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const t = String(iso).match(/T(\d\d:\d\d:\d\d)/);
+  return t ? t[1] : String(iso).slice(-8);
+}
+
+function summarizeFields(ev) {
+  // Skip noisy metadata, surface useful KV pairs
+  const skip = new Set(["time", "model", "freq", "freq1", "freq2", "rssi", "snr", "noise", "mod"]);
+  const parts = [];
+  for (const [k, v] of Object.entries(ev)) {
+    if (skip.has(k)) continue;
+    if (v === null || v === undefined) continue;
+    parts.push(`<span class="k">${k}=</span><span class="v">${String(v)}</span>`);
+    if (parts.length >= 6) break;
   }
+  return parts.join("  ");
+}
+
+function renderEvents() {
+  if (events.length === 0) {
+    eventListEl.innerHTML = `<div class="event-empty">No events yet. Hit <strong>Start Decoder</strong> in the sidebar to begin.</div>`;
+    return;
+  }
+  const filtered = events.filter(eventMatchesFilter);
+  const rows = filtered.map(ev => {
+    const time = fmtTime(ev.time);
+    const model = ev.model || "unknown";
+    const fields = summarizeFields(ev);
+    const rssi = ev.rssi_db != null ? `${ev.rssi_db.toFixed(0)} dB` : (ev.rssi != null ? `${ev.rssi}` : "");
+    return `<div class="event-row">
+      <span class="event-time">${time}</span>
+      <span><span class="event-model">${model}</span> <span class="event-fields">${fields}</span></span>
+      <span class="event-rssi">${rssi}</span>
+    </div>`;
+  });
+  eventListEl.innerHTML = rows.join("");
 }
 
 // ------------------------------------------------------------------
@@ -327,43 +360,58 @@ function updateSweepRate() {
   sweepRateEl.textContent = `${rate.toFixed(1)} Hz`;
 }
 
+function refreshStatusUI() {
+  const running = serverMode !== "idle";
+  statusDot.classList.toggle("running", running);
+  statusDot.classList.toggle("stopped", !running);
+  if (serverMode === "sweep") statusText.textContent = "Sweeping";
+  else if (serverMode === "decode") statusText.textContent = "Decoding";
+  else statusText.textContent = "Idle";
+  if (serverMode !== "sweep") sweepRateEl.textContent = "0.0 Hz";
+}
+
 // ------------------------------------------------------------------
 // Socket events
 // ------------------------------------------------------------------
-socket.on("connect", () => { /* status will arrive */ });
-
 socket.on("status", (s) => {
-  const running = !!s.running;
-  statusDot.classList.toggle("running", running);
-  statusDot.classList.toggle("stopped", !running);
-  statusText.textContent = running ? "Running" : "Stopped";
-  if (s.config) applyConfigToInputs(s.config);
-  if (!running) sweepRateEl.textContent = "0.0 Hz";
+  serverMode = s.mode || "idle";
+  if (s.sweep_config) applySweepConfigToInputs(s.sweep_config);
+  if (s.decode_config) applyDecodeConfigToInputs(s.decode_config);
+  refreshStatusUI();
 });
 
 socket.on("sweep", (msg) => {
   lastSweep = { f0: msg.f0, f1: msg.f1, powers: msg.powers };
-  drawFFT(msg.powers);
-  pushWaterfallRow(msg.powers);
+  if (currentMode === "sweep") {
+    drawFFT(msg.powers);
+    pushWaterfallRow(msg.powers);
+  }
   updateSweepRate();
 });
 
+socket.on("decoded", (ev) => {
+  events.unshift(ev);
+  if (events.length > MAX_EVENTS) events.length = MAX_EVENTS;
+  eventCountEl.textContent = String(events.length);
+  if (currentMode === "decode") renderEvents();
+});
+
 // ------------------------------------------------------------------
-// UI wiring
+// Config <-> input wiring
 // ------------------------------------------------------------------
-function applyConfigToInputs(c) {
+function applySweepConfigToInputs(c) {
   document.getElementById("f_start").value = c.f_start_mhz;
   document.getElementById("f_stop").value  = c.f_stop_mhz;
   document.getElementById("bin_width").value = c.bin_width_hz;
   document.getElementById("lna").value  = c.lna_gain;
   document.getElementById("vga").value  = c.vga_gain;
   document.getElementById("amp").checked = !!c.amp_enable;
-  updateSliderFills();
-  updateSliderLabels();
+  updateSliderFills(["lna", "vga"]);
+  document.getElementById("lna_val").textContent = `${c.lna_gain} dB`;
+  document.getElementById("vga_val").textContent = `${c.vga_gain} dB`;
   highlightPreset(c);
 }
-
-function readConfig() {
+function readSweepConfig() {
   return {
     f_start_mhz: parseInt(document.getElementById("f_start").value, 10),
     f_stop_mhz:  parseInt(document.getElementById("f_stop").value, 10),
@@ -374,16 +422,31 @@ function readConfig() {
   };
 }
 
-function updateSliderFills() {
-  for (const id of ["lna", "vga"]) {
+function applyDecodeConfigToInputs(c) {
+  document.getElementById("dec_freq").value = (c.freq_hz / 1e6).toFixed(2);
+  document.getElementById("dec_rate").value = (c.sample_rate / 1e6).toFixed(1);
+  document.getElementById("dec_gain").value = c.gain_db;
+  document.getElementById("dec_gain_val").textContent = `${c.gain_db} dB`;
+  updateSliderFills(["dec_gain"]);
+  highlightBandButton(c.freq_hz / 1e6);
+}
+function readDecodeConfig() {
+  const freqMhz = parseFloat(document.getElementById("dec_freq").value);
+  const rateMhz = parseFloat(document.getElementById("dec_rate").value);
+  return {
+    freq_hz: Math.round(freqMhz * 1e6),
+    sample_rate: Math.round(rateMhz * 1e6),
+    gain_db: parseInt(document.getElementById("dec_gain").value, 10),
+  };
+}
+
+function updateSliderFills(ids) {
+  for (const id of ids) {
     const el = document.getElementById(id);
+    if (!el) continue;
     const pct = ((el.value - el.min) / (el.max - el.min)) * 100;
     el.style.setProperty("--fill", `${pct}%`);
   }
-}
-function updateSliderLabels() {
-  document.getElementById("lna_val").textContent = `${document.getElementById("lna").value} dB`;
-  document.getElementById("vga_val").textContent = `${document.getElementById("vga").value} dB`;
 }
 
 function highlightPreset(c) {
@@ -394,36 +457,63 @@ function highlightPreset(c) {
     b.classList.toggle("active", match);
   });
 }
+function highlightBandButton(freqMhz) {
+  document.querySelectorAll(".band-btn").forEach(b => {
+    b.classList.toggle("active", Math.abs(parseFloat(b.dataset.freq) - freqMhz) < 0.01);
+  });
+}
 
+// preset chips
 document.querySelectorAll(".chip").forEach(b => {
   b.addEventListener("click", () => {
     document.getElementById("f_start").value = b.dataset.f0;
     document.getElementById("f_stop").value  = b.dataset.f1;
     document.getElementById("bin_width").value = b.dataset.bin;
-    highlightPreset(readConfig());
-    socket.emit("start", readConfig());
+    highlightPreset(readSweepConfig());
+    socket.emit("start_sweep", readSweepConfig());
   });
 });
 
-document.getElementById("btn-start").addEventListener("click", () => {
-  socket.emit("start", readConfig());
+// band buttons
+document.querySelectorAll(".band-btn").forEach(b => {
+  b.addEventListener("click", () => {
+    document.getElementById("dec_freq").value = b.dataset.freq;
+    highlightBandButton(parseFloat(b.dataset.freq));
+  });
 });
-document.getElementById("btn-stop").addEventListener("click", () => {
+
+// buttons
+document.getElementById("btn-start-sweep").addEventListener("click", () => {
+  socket.emit("start_sweep", readSweepConfig());
+});
+document.getElementById("btn-stop-sweep").addEventListener("click", () => {
+  socket.emit("stop");
+});
+document.getElementById("btn-start-decode").addEventListener("click", () => {
+  socket.emit("start_decode", readDecodeConfig());
+});
+document.getElementById("btn-stop-decode").addEventListener("click", () => {
   socket.emit("stop");
 });
 
-for (const id of ["lna", "vga"]) {
-  document.getElementById(id).addEventListener("input", () => {
-    updateSliderFills();
-    updateSliderLabels();
-  });
-}
-updateSliderFills();
-updateSliderLabels();
+// slider live readouts
+document.getElementById("lna").addEventListener("input", e => {
+  document.getElementById("lna_val").textContent = `${e.target.value} dB`;
+  updateSliderFills(["lna"]);
+});
+document.getElementById("vga").addEventListener("input", e => {
+  document.getElementById("vga_val").textContent = `${e.target.value} dB`;
+  updateSliderFills(["vga"]);
+});
+document.getElementById("dec_gain").addEventListener("input", e => {
+  document.getElementById("dec_gain_val").textContent = `${e.target.value} dB`;
+  updateSliderFills(["dec_gain"]);
+});
+updateSliderFills(["lna", "vga", "dec_gain"]);
 
-// hover readout
+// hover
 function handleHover(e) {
-  if (!lastSweep) return;
+  if (!lastSweep || currentMode !== "sweep") return;
   const rect = fftCanvas.getBoundingClientRect();
   cursorX = e.clientX - rect.left;
   const plotLeft = FFT_PADDING.left;
@@ -449,3 +539,7 @@ waterfallCanvas.addEventListener("mouseleave", () => {
   hoverFreqEl.textContent  = "— MHz";
   hoverPowerEl.textContent = "— dB";
 });
+
+// initial
+setMode("sweep");
+requestAnimationFrame(fitAll);

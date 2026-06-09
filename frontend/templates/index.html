@@ -13,10 +13,18 @@
     <span class="logo-mark"></span>
     <span class="logo-text">hackrf<span class="logo-dim">-web</span></span>
   </div>
+  <nav class="mode-tabs" id="mode-tabs">
+    <button class="mode-tab active" data-mode="sweep">Sweep</button>
+    <button class="mode-tab" data-mode="decode">Decode</button>
+  </nav>
   <div class="topbar-spacer"></div>
-  <div class="stat">
+  <div class="stat" id="stat-sweep">
     <span class="stat-label">Sweep</span>
     <span id="sweep-rate" class="stat-value">0.0 Hz</span>
+  </div>
+  <div class="stat" id="stat-events">
+    <span class="stat-label">Events</span>
+    <span id="event-count" class="stat-value">0</span>
   </div>
   <div class="stat">
     <span class="stat-label">Cursor</span>
@@ -25,73 +33,137 @@
   </div>
   <div class="status">
     <span id="status-dot" class="dot stopped"></span>
-    <span id="status-text" class="status-text">Stopped</span>
+    <span id="status-text" class="status-text">Idle</span>
   </div>
 </header>
 
 <main class="layout">
 
   <aside class="sidebar">
-    <section class="panel">
-      <h2>Range</h2>
-      <div class="row">
-        <label>Start <span class="unit">MHz</span></label>
-        <input id="f_start" type="number" value="88" min="1" max="6000" />
-      </div>
-      <div class="row">
-        <label>Stop <span class="unit">MHz</span></label>
-        <input id="f_stop" type="number" value="1000" min="1" max="6000" />
-      </div>
-      <div class="row">
-        <label>Bin <span class="unit">Hz</span></label>
-        <input id="bin_width" type="number" value="500000" min="1000" step="1000" />
-      </div>
-    </section>
 
-    <section class="panel">
-      <h2>Gain</h2>
-      <div class="row slider-row">
-        <label>LNA <span id="lna_val" class="unit">16 dB</span></label>
-        <input id="lna" type="range" value="16" min="0" max="40" step="8" />
-      </div>
-      <div class="row slider-row">
-        <label>VGA <span id="vga_val" class="unit">20 dB</span></label>
-        <input id="vga" type="range" value="20" min="0" max="62" step="2" />
-      </div>
-      <div class="row check-row">
-        <label for="amp">Amp <span class="unit">+14 dB</span></label>
-        <input id="amp" type="checkbox" />
-      </div>
-    </section>
+    <!-- Sweep mode controls -->
+    <div class="mode-pane" id="pane-sweep">
+      <section class="panel">
+        <h2>Range</h2>
+        <div class="row">
+          <label>Start <span class="unit">MHz</span></label>
+          <input id="f_start" type="number" value="88" min="1" max="6000" />
+        </div>
+        <div class="row">
+          <label>Stop <span class="unit">MHz</span></label>
+          <input id="f_stop" type="number" value="1000" min="1" max="6000" />
+        </div>
+        <div class="row">
+          <label>Bin <span class="unit">Hz</span></label>
+          <input id="bin_width" type="number" value="500000" min="1000" step="1000" />
+        </div>
+      </section>
 
-    <section class="panel actions">
-      <button id="btn-start" class="btn primary">▶ Start</button>
-      <button id="btn-stop" class="btn ghost">■ Stop</button>
-    </section>
+      <section class="panel">
+        <h2>Gain</h2>
+        <div class="row slider-row">
+          <label>LNA <span id="lna_val" class="unit">16 dB</span></label>
+          <input id="lna" type="range" value="16" min="0" max="40" step="8" />
+        </div>
+        <div class="row slider-row">
+          <label>VGA <span id="vga_val" class="unit">20 dB</span></label>
+          <input id="vga" type="range" value="20" min="0" max="62" step="2" />
+        </div>
+        <div class="row check-row">
+          <label for="amp">Amp <span class="unit">+14 dB</span></label>
+          <input id="amp" type="checkbox" />
+        </div>
+      </section>
+
+      <section class="panel actions">
+        <button id="btn-start-sweep" class="btn primary">▶ Start Sweep</button>
+        <button id="btn-stop-sweep" class="btn ghost">■ Stop</button>
+      </section>
+    </div>
+
+    <!-- Decode mode controls -->
+    <div class="mode-pane" id="pane-decode" hidden>
+      <section class="panel">
+        <h2>Tune</h2>
+        <div class="row">
+          <label>Center <span class="unit">MHz</span></label>
+          <input id="dec_freq" type="number" value="433.92" min="1" max="6000" step="0.01" />
+        </div>
+        <div class="row">
+          <label>Sample Rate <span class="unit">MSPS</span></label>
+          <input id="dec_rate" type="number" value="2.4" min="2.0" max="20" step="0.1" />
+        </div>
+        <div class="row slider-row">
+          <label>Gain <span id="dec_gain_val" class="unit">32 dB</span></label>
+          <input id="dec_gain" type="range" value="32" min="0" max="62" step="2" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Band Quick-Tune</h2>
+        <div class="band-buttons">
+          <button class="band-btn" data-freq="315">315</button>
+          <button class="band-btn" data-freq="345">345</button>
+          <button class="band-btn active" data-freq="433.92">433.92</button>
+          <button class="band-btn" data-freq="868.3">868.3</button>
+          <button class="band-btn" data-freq="915">915</button>
+        </div>
+      </section>
+
+      <section class="panel actions">
+        <button id="btn-start-decode" class="btn primary">▶ Start Decoder</button>
+        <button id="btn-stop-decode" class="btn ghost">■ Stop</button>
+      </section>
+
+      <section class="panel">
+        <h2>About</h2>
+        <p class="hint">
+          rtl_433 decodes 100+ ISM-band devices: weather stations, tire pressure,
+          doorbells, garage remotes, smoke alarms, smart meters.
+        </p>
+      </section>
+    </div>
   </aside>
 
   <section class="main">
 
-    <div class="presets" id="presets">
-      <button class="chip" data-f0="88"  data-f1="108"  data-bin="100000">FM Broadcast</button>
-      <button class="chip" data-f0="118" data-f1="137"  data-bin="50000">Aircraft</button>
-      <button class="chip" data-f0="144" data-f1="148"  data-bin="25000">2m Ham</button>
-      <button class="chip" data-f0="162" data-f1="163"  data-bin="25000">NOAA Wx</button>
-      <button class="chip" data-f0="420" data-f1="450"  data-bin="50000">70cm Ham</button>
-      <button class="chip" data-f0="433" data-f1="435"  data-bin="25000">ISM 433</button>
-      <button class="chip" data-f0="902" data-f1="928"  data-bin="100000">ISM 915</button>
-      <button class="chip" data-f0="2400" data-f1="2483" data-bin="500000">Wi-Fi 2.4</button>
-      <button class="chip" data-f0="5170" data-f1="5835" data-bin="1000000">Wi-Fi 5</button>
-      <button class="chip" data-f0="88"  data-f1="1000" data-bin="500000">Wideband</button>
+    <!-- Sweep view -->
+    <div class="view" id="view-sweep">
+      <div class="presets" id="presets">
+        <button class="chip" data-f0="88"  data-f1="108"  data-bin="100000">FM Broadcast</button>
+        <button class="chip" data-f0="118" data-f1="137"  data-bin="50000">Aircraft</button>
+        <button class="chip" data-f0="144" data-f1="148"  data-bin="25000">2m Ham</button>
+        <button class="chip" data-f0="162" data-f1="163"  data-bin="25000">NOAA Wx</button>
+        <button class="chip" data-f0="420" data-f1="450"  data-bin="50000">70cm Ham</button>
+        <button class="chip" data-f0="433" data-f1="435"  data-bin="25000">ISM 433</button>
+        <button class="chip" data-f0="902" data-f1="928"  data-bin="100000">ISM 915</button>
+        <button class="chip" data-f0="2400" data-f1="2483" data-bin="500000">Wi-Fi 2.4</button>
+        <button class="chip" data-f0="5170" data-f1="5835" data-bin="1000000">Wi-Fi 5</button>
+        <button class="chip" data-f0="88"  data-f1="1000" data-bin="500000">Wideband</button>
+      </div>
+
+      <div class="canvas-wrap fft-wrap">
+        <canvas id="fft"></canvas>
+        <div class="cv-label">Spectrum</div>
+      </div>
+      <div class="canvas-wrap waterfall-wrap">
+        <canvas id="waterfall"></canvas>
+        <div class="cv-label">Waterfall</div>
+      </div>
     </div>
 
-    <div class="canvas-wrap fft-wrap">
-      <canvas id="fft"></canvas>
-      <div class="cv-label">Spectrum</div>
-    </div>
-    <div class="canvas-wrap waterfall-wrap">
-      <canvas id="waterfall"></canvas>
-      <div class="cv-label">Waterfall</div>
+    <!-- Decode view -->
+    <div class="view" id="view-decode" hidden>
+      <div class="event-toolbar">
+        <span class="event-toolbar-label">Decoded Events</span>
+        <input id="event-filter" type="text" placeholder="Filter (model, key, value)…" />
+        <button id="btn-clear-events" class="btn ghost small">Clear</button>
+      </div>
+      <div class="event-list" id="event-list">
+        <div class="event-empty">
+          No events yet. Hit <strong>Start Decoder</strong> in the sidebar to begin.
+        </div>
+      </div>
     </div>
 
   </section>
