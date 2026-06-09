@@ -21,6 +21,7 @@
   <nav class="mode-tabs" id="mode-tabs">
     <button class="mode-tab active" data-mode="sweep">Sweep</button>
     <button class="mode-tab" data-mode="decode">Decode</button>
+    <button class="mode-tab" data-mode="capture">Capture</button>
   </nav>
   <div class="topbar-spacer"></div>
   <div class="stat" id="stat-sweep">
@@ -130,6 +131,69 @@
         </p>
       </section>
     </div>
+
+    <!-- Capture mode controls -->
+    <div class="mode-pane" id="pane-capture" hidden>
+      <section class="panel">
+        <h2>Tune</h2>
+        <div class="row">
+          <label>Center <span class="unit">MHz</span></label>
+          <input id="cap_freq" type="number" value="433.92" min="1" max="6000" step="0.01" />
+        </div>
+        <div class="row">
+          <label>Sample Rate <span class="unit">MSPS</span></label>
+          <input id="cap_rate" type="number" value="8" min="2" max="20" step="1" />
+        </div>
+        <div class="row">
+          <label>Duration <span class="unit">seconds</span></label>
+          <input id="cap_duration" type="number" value="5" min="0.1" max="600" step="0.5" />
+        </div>
+        <div class="row">
+          <label>Label <span class="unit">optional</span></label>
+          <input id="cap_label" type="text" placeholder="e.g. garage-keyfob" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Gain</h2>
+        <div class="row slider-row">
+          <label>LNA <span id="cap_lna_val" class="unit">16 dB</span></label>
+          <input id="cap_lna" type="range" value="16" min="0" max="40" step="8" />
+        </div>
+        <div class="row slider-row">
+          <label>VGA <span id="cap_vga_val" class="unit">20 dB</span></label>
+          <input id="cap_vga" type="range" value="20" min="0" max="62" step="2" />
+        </div>
+        <div class="row check-row">
+          <label for="cap_amp">Amp <span class="unit">+14 dB</span></label>
+          <input id="cap_amp" type="checkbox" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Band Quick-Tune</h2>
+        <div class="band-buttons">
+          <button class="band-btn-cap" data-freq="315">315</button>
+          <button class="band-btn-cap" data-freq="345">345</button>
+          <button class="band-btn-cap active" data-freq="433.92">433.92</button>
+          <button class="band-btn-cap" data-freq="868.3">868.3</button>
+          <button class="band-btn-cap" data-freq="915">915</button>
+        </div>
+      </section>
+
+      <section class="panel actions">
+        <button id="btn-start-capture" class="btn primary">● Record</button>
+        <button id="btn-cancel-capture" class="btn ghost">■ Cancel</button>
+      </section>
+
+      <section class="panel">
+        <h2>Files</h2>
+        <p class="hint">
+          Saved as cs8 (signed 8-bit interleaved I/Q) under <code>~/hackrf-web/captures/</code>.
+          Open in URH / inspectrum, or pipe through <code>rtl_433 -r cs8:file.iq</code>.
+        </p>
+      </section>
+    </div>
   </aside>
 
   <section class="main">
@@ -156,6 +220,32 @@
       <div class="canvas-wrap waterfall-wrap">
         <canvas id="waterfall"></canvas>
         <div class="cv-label">Waterfall</div>
+      </div>
+    </div>
+
+    <!-- Capture view -->
+    <div class="view" id="view-capture" hidden>
+      <div class="cap-active" id="cap-active" hidden>
+        <div class="cap-active-head">
+          <span class="cap-active-label" id="cap-active-name">capturing…</span>
+          <span class="cap-active-detail" id="cap-active-detail"></span>
+        </div>
+        <div class="cap-progress">
+          <div class="cap-progress-bar" id="cap-progress-bar"></div>
+        </div>
+        <div class="cap-active-foot">
+          <span id="cap-bytes">0 B</span>
+          <span id="cap-pct">0%</span>
+          <span id="cap-eta">— remaining</span>
+        </div>
+      </div>
+
+      <div class="event-toolbar">
+        <span class="event-toolbar-label">Captures</span>
+        <input id="cap-filter" type="text" placeholder="Filter (label, freq, name)…" />
+      </div>
+      <div class="captures-list" id="captures-list">
+        <div class="event-empty">No captures yet. Configure in the sidebar and hit Record.</div>
       </div>
     </div>
 

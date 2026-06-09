@@ -535,6 +535,111 @@ input[type="checkbox"] {
 .event-fields .v { color: var(--fg); }
 .event-rssi { color: var(--fg-faint); font-size: 11px; }
 
+/* capture active progress */
+.cap-active {
+  padding: 16px 18px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+}
+.cap-active-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.cap-active-label { color: var(--accent-strong); font-weight: 600; }
+.cap-active-detail { color: var(--fg-faint); font-family: var(--mono); font-size: 12px; }
+.cap-progress {
+  height: 8px;
+  background: var(--bg-3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.cap-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #80deea);
+  width: 0%;
+  box-shadow: 0 0 12px var(--accent-glow);
+  transition: width 0.18s linear;
+}
+.cap-active-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+/* captures list */
+.captures-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+.cap-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+.cap-row:hover { border-color: var(--border-strong); }
+.cap-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.cap-name {
+  font: 600 14px var(--ui);
+  color: var(--accent-strong);
+  word-break: break-all;
+}
+.cap-detail {
+  color: var(--fg-dim);
+  font: 12px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.cap-detail .sep { color: var(--fg-faint); padding: 0 6px; }
+.cap-meta {
+  color: var(--fg-faint);
+  font: 11px var(--mono);
+}
+.cap-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+  white-space: nowrap;
+}
+.cap-actions a, .cap-actions button {
+  font: 600 11px var(--ui);
+  color: var(--fg-dim);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+  border-radius: 4px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cap-actions a:hover { background: var(--bg-2); color: var(--accent-strong); border-color: var(--accent); }
+.cap-actions .danger:hover { background: rgba(239, 83, 80, 0.1); color: var(--bad); border-color: var(--bad); }
+
+code {
+  font-family: var(--mono);
+  background: var(--bg-0);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+}
+
 .canvas-wrap {
   position: relative;
   flex: 0 0 auto;

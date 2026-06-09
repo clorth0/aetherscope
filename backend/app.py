@@ -1,9 +1,9 @@
 """Flask + Socket.IO server.
 
-Streams HackRF sweep rows and rtl_433 decoded events to the browser.
-Sweep and decode are mutually exclusive (HackRF can only be claimed
-by one process at a time). Background poller emits device_status so
-the UI knows whether the HackRF is plugged in.
+Streams HackRF sweep rows, rtl_433 events, and IQ captures. All three
+operations require exclusive access to the HackRF and are mutually
+exclusive. A background poller emits device_status so the UI knows
+whether a HackRF is plugged in.
 """
 
 from __future__ import annotations
@@ -15,9 +15,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
-from flask import Flask, render_template
+from flask import Flask, jsonify, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 
+from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, delete_capture, list_captures
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
 from .sdr import SweepConfig, SweepStreamer
@@ -34,14 +35,16 @@ app = Flask(
 app.config["SECRET_KEY"] = "dev-local-only"
 socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=[])
 
-DEVICE_POLL_INTERVAL = 2.5  # seconds
+DEVICE_POLL_INTERVAL = 2.5
 
 _state: dict = {
-    "mode": "idle",             # "idle" | "sweep" | "decode"
+    "mode": "idle",             # "idle" | "sweep" | "decode" | "capture"
     "streamer": None,
     "decoder": None,
+    "capture": None,
     "sweep_config": SweepConfig(),
     "decode_config": DecodeConfig(),
+    "capture_config": CaptureConfig(),
 }
 _device: dict = {"info": None, "checked_at": 0.0}
 
@@ -73,6 +76,7 @@ def _emit_status() -> None:
             "mode": _state["mode"],
             "sweep_config": asdict(_state["sweep_config"]),
             "decode_config": asdict(_state["decode_config"]),
+            "capture_config": asdict(_state["capture_config"]),
         },
     )
 
@@ -80,20 +84,29 @@ def _emit_status() -> None:
 def _emit_device_status() -> None:
     socketio.emit(
         "device_status",
-        {
-            "info": _device["info"],
-            "checked_at": _device["checked_at"],
-        },
+        {"info": _device["info"], "checked_at": _device["checked_at"]},
     )
 
 
 def _emit_toast(level: str, message: str) -> None:
-    """level: 'info' | 'warn' | 'error'"""
     socketio.emit("toast", {"level": level, "message": message})
 
 
+def _emit_capture_progress(bytes_written: int, expected: int) -> None:
+    pct = (bytes_written / expected * 100) if expected > 0 else 0
+    socketio.emit("capture_progress", {
+        "bytes_written": bytes_written,
+        "expected": expected,
+        "pct": pct,
+    })
+
+
+def _emit_captures_list() -> None:
+    socketio.emit("captures", {"items": list_captures()})
+
+
 # ------------------------------------------------------------------
-# Job control (sweep & decode are mutually exclusive)
+# Job control
 # ------------------------------------------------------------------
 
 def _stop_all() -> None:
@@ -103,12 +116,14 @@ def _stop_all() -> None:
     if _state["decoder"]:
         _state["decoder"].stop()
         _state["decoder"] = None
+    if _state["capture"]:
+        _state["capture"].cancel()
+        _state["capture"] = None
     _state["mode"] = "idle"
 
 
 def _on_sweep_exit(reason: str) -> None:
     if reason == "died":
-        log.warning("sweep subprocess died unexpectedly")
         _emit_toast("error", "Sweep stopped: hackrf_sweep exited unexpectedly. Is the HackRF still connected?")
     _state["streamer"] = None
     if _state["mode"] == "sweep":
@@ -118,7 +133,6 @@ def _on_sweep_exit(reason: str) -> None:
 
 def _on_decode_exit(reason: str) -> None:
     if reason == "died":
-        log.warning("decoder subprocess died unexpectedly")
         _emit_toast("error", "Decoder stopped: rtl_433 exited unexpectedly. Is the HackRF still connected?")
     _state["decoder"] = None
     if _state["mode"] == "decode":
@@ -126,9 +140,25 @@ def _on_decode_exit(reason: str) -> None:
         _emit_status()
 
 
+def _on_capture_done(record, reason: str) -> None:
+    _state["capture"] = None
+    if _state["mode"] == "capture":
+        _state["mode"] = "idle"
+        _emit_status()
+    if reason == "completed":
+        size_mb = record.file_size / (1024 * 1024)
+        _emit_toast("info", f"Capture done: {record.name} ({size_mb:.1f} MB)")
+    elif reason == "cancelled":
+        _emit_toast("warn", f"Capture cancelled: {record.name}")
+    else:  # died
+        _emit_toast("error", f"Capture failed: {record.name} (HackRF disconnected?)")
+    socketio.emit("capture_done", {"record": asdict(record), "reason": reason})
+    _emit_captures_list()
+
+
 def _start_sweep(cfg: SweepConfig) -> bool:
     if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected. Plug it in and refresh device.")
+        _emit_toast("error", "Cannot start: HackRF not detected.")
         return False
     _stop_all()
     _state["sweep_config"] = cfg
@@ -141,7 +171,7 @@ def _start_sweep(cfg: SweepConfig) -> bool:
 
 def _start_decode(cfg: DecodeConfig) -> bool:
     if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected. Plug it in and refresh device.")
+        _emit_toast("error", "Cannot start: HackRF not detected.")
         return False
     _stop_all()
     _state["decode_config"] = cfg
@@ -152,12 +182,26 @@ def _start_decode(cfg: DecodeConfig) -> bool:
     return True
 
 
+def _start_capture(cfg: CaptureConfig) -> bool:
+    if _device["info"] is None:
+        _emit_toast("error", "Cannot start: HackRF not detected.")
+        return False
+    _stop_all()
+    _state["capture_config"] = cfg
+    cap = IqCapture(cfg, on_progress=_emit_capture_progress, on_done=_on_capture_done)
+    record = cap.start()
+    _state["capture"] = cap
+    _state["mode"] = "capture"
+    socketio.emit("capture_started", {"record": asdict(record)})
+    return True
+
+
 # ------------------------------------------------------------------
 # Background device poller
 # ------------------------------------------------------------------
 
 def _device_poller() -> None:
-    last_serial = object()
+    last_serial: object = object()
     while True:
         try:
             info = probe_hackrf()
@@ -166,13 +210,11 @@ def _device_poller() -> None:
             info = None
         _device["info"] = info
         _device["checked_at"] = time.time()
-        # always emit so the UI knows we're alive
         _emit_device_status()
-        # toast on transition
         new_serial = info.get("serial") if info else None
-        if last_serial is not object() and new_serial != last_serial:
+        if last_serial is not object and new_serial != last_serial:
             if info:
-                _emit_toast("info", f"HackRF connected ({info.get('serial', '?')[:8]})")
+                _emit_toast("info", f"HackRF connected ({info.get('serial', '?')[-6:].upper()})")
             else:
                 _emit_toast("warn", "HackRF disconnected")
         last_serial = new_serial
@@ -180,7 +222,7 @@ def _device_poller() -> None:
 
 
 # ------------------------------------------------------------------
-# Routes & events
+# Routes & socket events
 # ------------------------------------------------------------------
 
 @app.route("/")
@@ -188,36 +230,55 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/captures/<path:name>")
+def serve_capture(name: str):
+    return send_from_directory(CAPTURES_DIR, name, as_attachment=True)
+
+
+@app.route("/api/captures")
+def api_captures():
+    return jsonify(list_captures())
+
+
 @socketio.on("connect")
 def on_connect():
-    emit(
-        "status",
-        {
-            "mode": _state["mode"],
-            "sweep_config": asdict(_state["sweep_config"]),
-            "decode_config": asdict(_state["decode_config"]),
-        },
-    )
-    emit(
-        "device_status",
-        {"info": _device["info"], "checked_at": _device["checked_at"]},
-    )
+    emit("status", {
+        "mode": _state["mode"],
+        "sweep_config": asdict(_state["sweep_config"]),
+        "decode_config": asdict(_state["decode_config"]),
+        "capture_config": asdict(_state["capture_config"]),
+    })
+    emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
+    emit("captures", {"items": list_captures()})
+
+
+def _filter_payload(data, cls):
+    keys = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+    return {k: v for k, v in (data or {}).items() if k in keys}
 
 
 @socketio.on("start_sweep")
 def on_start_sweep(data):
-    keys = {f.name for f in SweepConfig.__dataclass_fields__.values()}  # type: ignore[attr-defined]
-    payload = {k: v for k, v in (data or {}).items() if k in keys}
-    if _start_sweep(SweepConfig(**payload)):
+    if _start_sweep(SweepConfig(**_filter_payload(data, SweepConfig))):
         _emit_status()
 
 
 @socketio.on("start_decode")
 def on_start_decode(data):
-    keys = {f.name for f in DecodeConfig.__dataclass_fields__.values()}  # type: ignore[attr-defined]
-    payload = {k: v for k, v in (data or {}).items() if k in keys}
-    if _start_decode(DecodeConfig(**payload)):
+    if _start_decode(DecodeConfig(**_filter_payload(data, DecodeConfig))):
         _emit_status()
+
+
+@socketio.on("start_capture")
+def on_start_capture(data):
+    if _start_capture(CaptureConfig(**_filter_payload(data, CaptureConfig))):
+        _emit_status()
+
+
+@socketio.on("cancel_capture")
+def on_cancel_capture():
+    if _state["capture"]:
+        _state["capture"].cancel()
 
 
 @socketio.on("stop")
@@ -232,9 +293,21 @@ def on_refresh_device():
         _device["info"] = probe_hackrf()
         _device["checked_at"] = time.time()
     except Exception:
-        log.exception("manual device refresh failed")
         _device["info"] = None
     _emit_device_status()
+
+
+@socketio.on("list_captures")
+def on_list_captures():
+    _emit_captures_list()
+
+
+@socketio.on("delete_capture")
+def on_delete_capture(data):
+    name = (data or {}).get("name", "")
+    if delete_capture(name):
+        _emit_toast("info", f"Deleted {name}")
+    _emit_captures_list()
 
 
 def main() -> None:

@@ -20,10 +20,12 @@ const hoverPowerEl = document.getElementById("hover-power");
 const sweepRateEl  = document.getElementById("sweep-rate");
 const eventCountEl = document.getElementById("event-count");
 
-const viewSweep  = document.getElementById("view-sweep");
-const viewDecode = document.getElementById("view-decode");
-const paneSweep  = document.getElementById("pane-sweep");
-const paneDecode = document.getElementById("pane-decode");
+const viewSweep   = document.getElementById("view-sweep");
+const viewDecode  = document.getElementById("view-decode");
+const viewCapture = document.getElementById("view-capture");
+const paneSweep   = document.getElementById("pane-sweep");
+const paneDecode  = document.getElementById("pane-decode");
+const paneCapture = document.getElementById("pane-capture");
 
 let currentMode  = "sweep";         // UI mode (sweep | decode)
 let serverMode   = "idle";          // backend mode (idle | sweep | decode)
@@ -46,14 +48,17 @@ const DPR = Math.max(window.devicePixelRatio || 1, 1);
 // ------------------------------------------------------------------
 function setMode(mode) {
   currentMode = mode;
-  viewSweep.hidden  = mode !== "sweep";
-  viewDecode.hidden = mode !== "decode";
-  paneSweep.hidden  = mode !== "sweep";
-  paneDecode.hidden = mode !== "decode";
+  viewSweep.hidden   = mode !== "sweep";
+  viewDecode.hidden  = mode !== "decode";
+  viewCapture.hidden = mode !== "capture";
+  paneSweep.hidden   = mode !== "sweep";
+  paneDecode.hidden  = mode !== "decode";
+  paneCapture.hidden = mode !== "capture";
   document.querySelectorAll(".mode-tab").forEach(t => {
     t.classList.toggle("active", t.dataset.mode === mode);
   });
   if (mode === "sweep") requestAnimationFrame(fitAll);
+  if (mode === "capture") socket.emit("list_captures");
 }
 
 document.querySelectorAll(".mode-tab").forEach(tab => {
@@ -371,6 +376,7 @@ function refreshStatusUI() {
   statusDot.classList.toggle("stopped", !running);
   if (serverMode === "sweep") statusText.textContent = "Sweeping";
   else if (serverMode === "decode") statusText.textContent = "Decoding";
+  else if (serverMode === "capture") statusText.textContent = "Recording";
   else statusText.textContent = "Idle";
   if (serverMode !== "sweep") sweepRateEl.textContent = "0.0 Hz";
 }
@@ -424,6 +430,7 @@ socket.on("status", (s) => {
   serverMode = s.mode || "idle";
   if (s.sweep_config) applySweepConfigToInputs(s.sweep_config);
   if (s.decode_config) applyDecodeConfigToInputs(s.decode_config);
+  if (s.capture_config) applyCaptureConfigToInputs(s.capture_config);
   refreshStatusUI();
 });
 
@@ -585,6 +592,159 @@ waterfallCanvas.addEventListener("mouseleave", () => {
   cursorX = -1;
   hoverFreqEl.textContent  = "— MHz";
   hoverPowerEl.textContent = "— dB";
+});
+
+// ------------------------------------------------------------------
+// Capture mode
+// ------------------------------------------------------------------
+const capActiveEl   = document.getElementById("cap-active");
+const capNameEl     = document.getElementById("cap-active-name");
+const capDetailEl   = document.getElementById("cap-active-detail");
+const capBarEl      = document.getElementById("cap-progress-bar");
+const capBytesEl    = document.getElementById("cap-bytes");
+const capPctEl      = document.getElementById("cap-pct");
+const capEtaEl      = document.getElementById("cap-eta");
+const capturesListEl = document.getElementById("captures-list");
+const capFilterEl   = document.getElementById("cap-filter");
+
+let captures = [];
+let capFilter = "";
+
+capFilterEl.addEventListener("input", () => {
+  capFilter = capFilterEl.value.trim().toLowerCase();
+  renderCaptures();
+});
+
+function fmtBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+function fmtMHz(hz) { return `${(hz / 1e6).toFixed(3)} MHz`; }
+function fmtMSps(hz) { return `${(hz / 1e6).toFixed(1)} MSPS`; }
+function fmtAgo(ts) {
+  const dt = Date.now() / 1000 - ts;
+  if (dt < 60) return `${Math.round(dt)}s ago`;
+  if (dt < 3600) return `${Math.round(dt / 60)}m ago`;
+  if (dt < 86400) return `${Math.round(dt / 3600)}h ago`;
+  return `${Math.round(dt / 86400)}d ago`;
+}
+
+function renderCaptures() {
+  if (!captures.length) {
+    capturesListEl.innerHTML = `<div class="event-empty">No captures yet. Configure in the sidebar and hit Record.</div>`;
+    return;
+  }
+  const filtered = captures.filter(c => {
+    if (!capFilter) return true;
+    const blob = `${c.name} ${c.label} ${c.freq_hz}`.toLowerCase();
+    return blob.includes(capFilter);
+  });
+  capturesListEl.innerHTML = filtered.map(c => `
+    <div class="cap-row">
+      <div class="cap-main">
+        <div class="cap-name">${c.label || c.name}</div>
+        <div class="cap-detail">
+          ${fmtMHz(c.freq_hz)}<span class="sep">·</span>
+          ${fmtMSps(c.sample_rate)}<span class="sep">·</span>
+          ${c.duration_s.toFixed(1)}s<span class="sep">·</span>
+          ${fmtBytes(c.file_size)}
+        </div>
+        <div class="cap-meta">${c.name} · ${fmtAgo(c.started_at)} · ${c.sample_format}</div>
+      </div>
+      <div class="cap-actions">
+        <a href="/captures/${encodeURIComponent(c.name)}" download>Download</a>
+        <button class="danger" data-delete="${c.name}">Delete</button>
+      </div>
+    </div>
+  `).join("");
+
+  capturesListEl.querySelectorAll("[data-delete]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (confirm(`Delete ${btn.dataset.delete}?`)) {
+        socket.emit("delete_capture", { name: btn.dataset.delete });
+      }
+    });
+  });
+}
+
+function readCaptureConfig() {
+  return {
+    freq_hz: Math.round(parseFloat(document.getElementById("cap_freq").value) * 1e6),
+    sample_rate: Math.round(parseFloat(document.getElementById("cap_rate").value) * 1e6),
+    duration_s: parseFloat(document.getElementById("cap_duration").value),
+    lna_gain: parseInt(document.getElementById("cap_lna").value, 10),
+    vga_gain: parseInt(document.getElementById("cap_vga").value, 10),
+    amp_enable: document.getElementById("cap_amp").checked,
+    label: document.getElementById("cap_label").value,
+  };
+}
+
+function applyCaptureConfigToInputs(c) {
+  document.getElementById("cap_freq").value = (c.freq_hz / 1e6).toFixed(2);
+  document.getElementById("cap_rate").value = (c.sample_rate / 1e6).toFixed(0);
+  document.getElementById("cap_duration").value = c.duration_s;
+  document.getElementById("cap_lna").value = c.lna_gain;
+  document.getElementById("cap_vga").value = c.vga_gain;
+  document.getElementById("cap_amp").checked = !!c.amp_enable;
+  document.getElementById("cap_lna_val").textContent = `${c.lna_gain} dB`;
+  document.getElementById("cap_vga_val").textContent = `${c.vga_gain} dB`;
+  if (c.label) document.getElementById("cap_label").value = c.label;
+  updateSliderFills(["cap_lna", "cap_vga"]);
+}
+
+document.querySelectorAll(".band-btn-cap").forEach(b => {
+  b.addEventListener("click", () => {
+    document.getElementById("cap_freq").value = b.dataset.freq;
+    document.querySelectorAll(".band-btn-cap").forEach(x => x.classList.toggle("active", x === b));
+  });
+});
+
+document.getElementById("btn-start-capture").addEventListener("click", () => {
+  socket.emit("start_capture", readCaptureConfig());
+});
+document.getElementById("btn-cancel-capture").addEventListener("click", () => {
+  socket.emit("cancel_capture");
+});
+
+document.getElementById("cap_lna").addEventListener("input", e => {
+  document.getElementById("cap_lna_val").textContent = `${e.target.value} dB`;
+  updateSliderFills(["cap_lna"]);
+});
+document.getElementById("cap_vga").addEventListener("input", e => {
+  document.getElementById("cap_vga_val").textContent = `${e.target.value} dB`;
+  updateSliderFills(["cap_vga"]);
+});
+updateSliderFills(["cap_lna", "cap_vga"]);
+
+socket.on("capture_started", (msg) => {
+  capActiveEl.hidden = false;
+  capNameEl.textContent = `Recording: ${msg.record.label || msg.record.name}`;
+  capDetailEl.textContent = `${fmtMHz(msg.record.freq_hz)} @ ${fmtMSps(msg.record.sample_rate)} · ${msg.record.duration_s}s`;
+  capBarEl.style.width = "0%";
+  capBytesEl.textContent = "0 B";
+  capPctEl.textContent = "0%";
+});
+
+socket.on("capture_progress", (p) => {
+  capBarEl.style.width = `${Math.min(100, p.pct).toFixed(1)}%`;
+  capBytesEl.textContent = `${fmtBytes(p.bytes_written)} / ${fmtBytes(p.expected)}`;
+  capPctEl.textContent = `${Math.min(100, p.pct).toFixed(0)}%`;
+  const remainingBytes = Math.max(0, p.expected - p.bytes_written);
+  const rateBps = p.bytes_written > 0 ? (p.bytes_written / Math.max(0.001, p.pct / 100)) : 0;
+  const remainingPctSec = p.pct > 0 ? ((100 - p.pct) / (p.pct / Math.max(0.5, p.bytes_written / Math.max(1, rateBps)))) : 0;
+  capEtaEl.textContent = remainingBytes > 0 ? `${(remainingBytes / (1024 * 1024)).toFixed(1)} MB remaining` : "almost done";
+});
+
+socket.on("capture_done", () => {
+  capActiveEl.hidden = true;
+  socket.emit("list_captures");
+});
+
+socket.on("captures", (msg) => {
+  captures = msg.items || [];
+  renderCaptures();
 });
 
 // initial
