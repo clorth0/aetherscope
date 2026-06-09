@@ -1,98 +1,100 @@
 # hackrf-web
 
-Self-hosted browser UI for a [HackRF One](https://greatscottgadgets.com/hackrf/) SDR. Live spectrum sweep + scrolling waterfall, designed to be the starting point for a homelab security-RX workflow.
+Self-hosted browser UI for a [HackRF One](https://greatscottgadgets.com/hackrf/) SDR. Live spectrum + waterfall, single-frequency ISM device decoding via rtl_433, IQ capture-to-disk, ADS-B aircraft tracking on a map, and a multi-phase Auto-Scan that does all of the above sequentially and produces a single report. Designed for a homelab security-RX workflow.
 
-Runs on `127.0.0.1` only — intended to be reached over Tailscale or `ssh -L`.
+Binds to `127.0.0.1` only — intended to be reached over Tailscale or `ssh -L`.
 
-## Status
+## Modes
 
-MVP. Live wideband sweep + waterfall + tuning + gain controls. Decoders (`rtl_433`, `dump1090`, replay tooling) planned.
+| Mode | What it does | Underlying tool |
+|---|---|---|
+| **Sweep** | Live FFT + scrolling waterfall, 1 Hz to 6 GHz | `hackrf_sweep` |
+| **Decode** | Live ISM-band device decoding (315/433/868/915 MHz) | `rtl_433` w/ SoapySDR |
+| **Capture** | Record IQ to disk + JSON sidecar | `hackrf_transfer` |
+| **ADS-B** | Aircraft tracking with Leaflet dark-tile map | `readsb-hackrf` |
+| **Auto-Scan** | Sequential pipeline: sweep → ISM 433 → ISM 915 → ADS-B → report | all of the above |
 
 ## Requirements
 
 - macOS (Apple Silicon tested) or Linux
-- Homebrew packages: `hackrf` (sweep/transfer/info), `rtl_433` for Decode mode (rebuild from source with SoapySDR — see below)
-- `readsb-hackrf` for ADS-B mode — built from source with `HACKRF=yes` (see below)
-- Python 3.11+
-- [`uv`](https://github.com/astral-sh/uv) (recommended) or `pip`
+- Homebrew on macOS
+- A HackRF One plugged in directly to the host (USB passthrough doesn't work on macOS Docker)
 
-### Decoder/ADS-B prerequisites (one-time)
+## Install on macOS (one command)
 
 ```sh
-# rtl_433 must be compiled against SoapySDR (Homebrew bottle is RTL-SDR only)
-brew install --build-from-source rtl_433
-
-# readsb-hackrf for ADS-B
-git clone --depth 1 https://github.com/wiedehopf/readsb /tmp/readsb-build
-cd /tmp/readsb-build
-sed -i.bak -E 's/( -Werror)([^=])/\2/g; s/ -Werror$//' Makefile  # strict warnings on macOS
-make HACKRF=yes -j8
-mkdir -p ~/.local/bin && cp readsb ~/.local/bin/readsb-hackrf
-```
-
-## Install
-
-```sh
-brew install hackrf
 git clone https://github.com/clorth0/hackrf-web.git
 cd hackrf-web
-uv sync
+./deploy/install.sh
 ```
 
-## Run
+The installer:
+
+1. Installs the Homebrew SDR stack (`hackrf`, `librtlsdr`, `soapysdr`, `soapyhackrf`, `soapyrtlsdr`)
+2. Rebuilds `rtl_433` from source if the bottle was missing SoapySDR (needed to use the HackRF)
+3. Builds `readsb-hackrf` from `wiedehopf/readsb` with `HACKRF=yes`, installs to `~/.local/bin/`
+4. Installs `uv` if missing
+5. Runs `uv sync` to install Python deps
+
+## Running
+
+**Manual** (foreground, kill with Ctrl-C):
 
 ```sh
 uv run hackrf-web
 ```
 
+**As a managed launchd service** (auto-start on login, restart on crash):
+
+```sh
+./deploy/install-launchd.sh
+```
+
 Then open <http://127.0.0.1:8765/>.
+
+Useful launchd commands (also printed by the installer):
+
+```sh
+launchctl print     gui/$(id -u)/local.hackrf-web   # status, pid, last exit
+launchctl kickstart -k gui/$(id -u)/local.hackrf-web   # restart
+launchctl kill SIGTERM gui/$(id -u)/local.hackrf-web   # stop (auto-respawns)
+launchctl bootout      gui/$(id -u)/local.hackrf-web   # disable and unload
+tail -f ~/Library/Logs/hackrf-web/stderr.log
+```
+
+Override the service label with `HACKRF_WEB_LABEL=…` if you have a naming convention.
+
+## Configuration
+
+Environment variables, all optional:
+
+- `HACKRF_WEB_CAPTURES_DIR` — where IQ recordings land (defaults to `<repo>/captures/`)
+
+## Why not Docker?
+
+macOS Docker Desktop cannot pass USB devices through to containers, and the HackRF needs direct USB access. On Linux, USB passthrough works and Docker is straightforward — a Dockerfile is on the roadmap.
 
 ## Architecture
 
 ```
-┌──────────────┐  CSV stdout   ┌──────────────┐  WebSocket   ┌──────────────┐
-│ hackrf_sweep ├──────────────▶│ backend/sdr  ├─────────────▶│ canvas UI    │
-└──────────────┘               │  (Flask app) │              │  (vanilla JS)│
-                               └──────────────┘              └──────────────┘
+┌──────────────┐   stdout/JSON/files   ┌──────────────┐   Socket.IO    ┌──────────────┐
+│ hackrf_sweep │                       │ Flask + JS   │                │ Browser      │
+│ hackrf_xfer  ├──────────────────────▶│ orchestration ├──────────────▶│ canvas + map │
+│ rtl_433      │                       │ (one slot,   │                │ + event log  │
+│ readsb       │                       │  mutex)      │                │              │
+└──────────────┘                       └──────────────┘                └──────────────┘
 ```
 
-- `backend/sdr.py` spawns `hackrf_sweep`, parses chunked CSV output, accumulates one row per full sweep cycle.
-- `backend/app.py` exposes a Socket.IO server. Clients send `start`/`stop` with a `SweepConfig`; server streams `sweep` events.
-- `frontend/static/waterfall.js` renders the FFT line plot and scrolling waterfall on `<canvas>`.
-
-## Running as a service (macOS launchd)
-
-`hackrf-web` ships with a launchd plist that keeps it running, restarts
-it on crash, and starts it automatically at login. Install:
-
-```sh
-cp deploy/com.clorth0.hackrf-web.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.clorth0.hackrf-web.plist
-launchctl kickstart -k gui/$(id -u)/com.clorth0.hackrf-web
-```
-
-Edit the absolute paths in the plist if you cloned the repo somewhere
-other than `~/hackrf-web`.
-
-Useful commands:
-
-```sh
-launchctl print     gui/$(id -u)/com.clorth0.hackrf-web   # status, last exit, pid
-launchctl kickstart -k gui/$(id -u)/com.clorth0.hackrf-web   # restart
-launchctl kill SIGTERM gui/$(id -u)/com.clorth0.hackrf-web   # stop (launchd will respawn)
-launchctl bootout      gui/$(id -u)/com.clorth0.hackrf-web   # disable and unload
-tail -f ~/Library/Logs/hackrf-web/stderr.log               # follow logs
-```
-
-Not Dockerized intentionally — macOS Docker Desktop cannot pass USB
-devices to containers, so the HackRF can only be reached by host-native
-processes. On Linux, a Dockerfile would be straightforward and is on
-the roadmap.
+All HackRF-claiming jobs (sweep, decode, capture, ADS-B, auto-scan) are mutually exclusive — the backend keeps a single "current job" slot. Background poller probes `hackrf_info` every 2.5 s so the UI shows live device status.
 
 ## Roadmap
 
-- `rtl_433` decoder integration for ISM-band IoT chatter
-- `dump1090` integration for ADS-B
-- IQ capture-to-disk endpoint
-- Per-band presets (FM broadcast / aircraft / NOAA / ham 2m / ISM)
-- Auth (basic, behind Tailscale fine for now)
+- `rtl_433` decoder integration ✓
+- IQ capture-to-disk ✓
+- ADS-B (readsb-hackrf) with live aircraft map ✓
+- Auto-scan: sweep + ISM 433 + ISM 915 + ADS-B sequential report ✓
+- Per-band gain presets ✓
+- launchd service ✓
+- Tailscale-serve docs
+- Basic auth (for when you want to expose beyond Tailscale)
+- Linux Dockerfile + compose

@@ -21,7 +21,10 @@ from typing import Callable
 log = logging.getLogger(__name__)
 
 HACKRF_TRANSFER = shutil.which("hackrf_transfer") or "/opt/homebrew/bin/hackrf_transfer"
-CAPTURES_DIR = Path.home() / "hackrf-web" / "captures"
+
+# Captures land next to the repo by default; override with HACKRF_WEB_CAPTURES_DIR
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+CAPTURES_DIR = Path(os.environ.get("HACKRF_WEB_CAPTURES_DIR") or (_REPO_ROOT / "captures"))
 
 
 def _slug(label: str) -> str:
