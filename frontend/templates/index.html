@@ -4,7 +4,11 @@
 <meta charset="utf-8" />
 <title>hackrf-web</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 </head>
 <body>
 
@@ -22,6 +26,7 @@
     <button class="mode-tab active" data-mode="sweep">Sweep</button>
     <button class="mode-tab" data-mode="decode">Decode</button>
     <button class="mode-tab" data-mode="capture">Capture</button>
+    <button class="mode-tab" data-mode="adsb">ADS-B</button>
   </nav>
   <div class="topbar-spacer"></div>
   <div class="stat" id="stat-sweep">
@@ -132,6 +137,39 @@
       </section>
     </div>
 
+    <!-- ADS-B mode controls -->
+    <div class="mode-pane" id="pane-adsb" hidden>
+      <section class="panel">
+        <h2>Receiver</h2>
+        <div class="row slider-row">
+          <label>Gain <span id="adsb_gain_val" class="unit">32 dB</span></label>
+          <input id="adsb_gain" type="range" value="32" min="0" max="62" step="2" />
+        </div>
+        <div class="row">
+          <label>Your Lat <span class="unit">optional</span></label>
+          <input id="adsb_lat" type="number" step="0.0001" placeholder="38.8951" />
+        </div>
+        <div class="row">
+          <label>Your Lon <span class="unit">optional</span></label>
+          <input id="adsb_lon" type="number" step="0.0001" placeholder="-77.0364" />
+        </div>
+      </section>
+
+      <section class="panel actions">
+        <button id="btn-start-adsb" class="btn primary">▶ Start ADS-B</button>
+        <button id="btn-stop-adsb" class="btn ghost">■ Stop</button>
+      </section>
+
+      <section class="panel">
+        <h2>About</h2>
+        <p class="hint">
+          1090 MHz Mode S transponders. Decoded by readsb-hackrf. You'll
+          see aircraft within ~250 mi (longer with a better antenna).
+          Set your location to anchor the map; works fine without.
+        </p>
+      </section>
+    </div>
+
     <!-- Capture mode controls -->
     <div class="mode-pane" id="pane-capture" hidden>
       <section class="panel">
@@ -221,6 +259,19 @@
       <div class="canvas-wrap waterfall-wrap">
         <canvas id="waterfall"></canvas>
         <div class="cv-label">Waterfall</div>
+      </div>
+    </div>
+
+    <!-- ADS-B view -->
+    <div class="view" id="view-adsb" hidden>
+      <div id="adsb-map"></div>
+      <div class="event-toolbar">
+        <span class="event-toolbar-label">Aircraft</span>
+        <span id="adsb-stats" class="adsb-stats">0 tracked · 0 with position</span>
+        <input id="adsb-filter" type="text" placeholder="Filter (callsign, hex, altitude)…" />
+      </div>
+      <div class="aircraft-list" id="aircraft-list">
+        <div class="event-empty">No aircraft yet. Start ADS-B in the sidebar.</div>
       </div>
     </div>
 

@@ -18,6 +18,7 @@ import numpy as np
 from flask import Flask, jsonify, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 
+from .adsb import AdsbConfig, AdsbReceiver
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, delete_capture, list_captures
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
@@ -38,13 +39,15 @@ socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=[])
 DEVICE_POLL_INTERVAL = 2.5
 
 _state: dict = {
-    "mode": "idle",             # "idle" | "sweep" | "decode" | "capture"
+    "mode": "idle",             # "idle" | "sweep" | "decode" | "capture" | "adsb"
     "streamer": None,
     "decoder": None,
     "capture": None,
+    "adsb": None,
     "sweep_config": SweepConfig(),
     "decode_config": DecodeConfig(),
     "capture_config": CaptureConfig(),
+    "adsb_config": AdsbConfig(),
 }
 _device: dict = {"info": None, "checked_at": 0.0}
 
@@ -77,6 +80,7 @@ def _emit_status() -> None:
             "sweep_config": asdict(_state["sweep_config"]),
             "decode_config": asdict(_state["decode_config"]),
             "capture_config": asdict(_state["capture_config"]),
+            "adsb_config": asdict(_state["adsb_config"]),
         },
     )
 
@@ -105,6 +109,10 @@ def _emit_captures_list() -> None:
     socketio.emit("captures", {"items": list_captures()})
 
 
+def _emit_adsb(aircraft: list[dict], meta: dict) -> None:
+    socketio.emit("adsb", {"aircraft": aircraft, "meta": meta})
+
+
 # ------------------------------------------------------------------
 # Job control
 # ------------------------------------------------------------------
@@ -119,6 +127,9 @@ def _stop_all() -> None:
     if _state["capture"]:
         _state["capture"].cancel()
         _state["capture"] = None
+    if _state["adsb"]:
+        _state["adsb"].stop()
+        _state["adsb"] = None
     _state["mode"] = "idle"
 
 
@@ -179,6 +190,28 @@ def _start_decode(cfg: DecodeConfig) -> bool:
     decoder.start()
     _state["decoder"] = decoder
     _state["mode"] = "decode"
+    return True
+
+
+def _on_adsb_exit(reason: str) -> None:
+    if reason == "died":
+        _emit_toast("error", "ADS-B stopped: readsb exited unexpectedly. Is the HackRF still connected?")
+    _state["adsb"] = None
+    if _state["mode"] == "adsb":
+        _state["mode"] = "idle"
+        _emit_status()
+
+
+def _start_adsb(cfg: AdsbConfig) -> bool:
+    if _device["info"] is None:
+        _emit_toast("error", "Cannot start: HackRF not detected.")
+        return False
+    _stop_all()
+    _state["adsb_config"] = cfg
+    recv = AdsbReceiver(cfg, on_update=_emit_adsb, on_exit=_on_adsb_exit)
+    recv.start()
+    _state["adsb"] = recv
+    _state["mode"] = "adsb"
     return True
 
 
@@ -247,6 +280,7 @@ def on_connect():
         "sweep_config": asdict(_state["sweep_config"]),
         "decode_config": asdict(_state["decode_config"]),
         "capture_config": asdict(_state["capture_config"]),
+        "adsb_config": asdict(_state["adsb_config"]),
     })
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
     emit("captures", {"items": list_captures()})
@@ -272,6 +306,12 @@ def on_start_decode(data):
 @socketio.on("start_capture")
 def on_start_capture(data):
     if _start_capture(CaptureConfig(**_filter_payload(data, CaptureConfig))):
+        _emit_status()
+
+
+@socketio.on("start_adsb")
+def on_start_adsb(data):
+    if _start_adsb(AdsbConfig(**_filter_payload(data, AdsbConfig))):
         _emit_status()
 
 

@@ -11,9 +11,24 @@ MVP. Live wideband sweep + waterfall + tuning + gain controls. Decoders (`rtl_43
 ## Requirements
 
 - macOS (Apple Silicon tested) or Linux
-- Homebrew packages: `hackrf` (provides `hackrf_sweep`)
+- Homebrew packages: `hackrf` (sweep/transfer/info), `rtl_433` for Decode mode (rebuild from source with SoapySDR — see below)
+- `readsb-hackrf` for ADS-B mode — built from source with `HACKRF=yes` (see below)
 - Python 3.11+
 - [`uv`](https://github.com/astral-sh/uv) (recommended) or `pip`
+
+### Decoder/ADS-B prerequisites (one-time)
+
+```sh
+# rtl_433 must be compiled against SoapySDR (Homebrew bottle is RTL-SDR only)
+brew install --build-from-source rtl_433
+
+# readsb-hackrf for ADS-B
+git clone --depth 1 https://github.com/wiedehopf/readsb /tmp/readsb-build
+cd /tmp/readsb-build
+sed -i.bak -E 's/( -Werror)([^=])/\2/g; s/ -Werror$//' Makefile  # strict warnings on macOS
+make HACKRF=yes -j8
+mkdir -p ~/.local/bin && cp readsb ~/.local/bin/readsb-hackrf
+```
 
 ## Install
 

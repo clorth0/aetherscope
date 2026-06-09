@@ -23,9 +23,11 @@ const eventCountEl = document.getElementById("event-count");
 const viewSweep   = document.getElementById("view-sweep");
 const viewDecode  = document.getElementById("view-decode");
 const viewCapture = document.getElementById("view-capture");
+const viewAdsb    = document.getElementById("view-adsb");
 const paneSweep   = document.getElementById("pane-sweep");
 const paneDecode  = document.getElementById("pane-decode");
 const paneCapture = document.getElementById("pane-capture");
+const paneAdsb    = document.getElementById("pane-adsb");
 
 let currentMode  = "sweep";         // UI mode (sweep | decode)
 let serverMode   = "idle";          // backend mode (idle | sweep | decode)
@@ -51,14 +53,17 @@ function setMode(mode) {
   viewSweep.hidden   = mode !== "sweep";
   viewDecode.hidden  = mode !== "decode";
   viewCapture.hidden = mode !== "capture";
+  viewAdsb.hidden    = mode !== "adsb";
   paneSweep.hidden   = mode !== "sweep";
   paneDecode.hidden  = mode !== "decode";
   paneCapture.hidden = mode !== "capture";
+  paneAdsb.hidden    = mode !== "adsb";
   document.querySelectorAll(".mode-tab").forEach(t => {
     t.classList.toggle("active", t.dataset.mode === mode);
   });
   if (mode === "sweep") requestAnimationFrame(fitAll);
   if (mode === "capture") socket.emit("list_captures");
+  if (mode === "adsb") initAdsbMap();
 }
 
 document.querySelectorAll(".mode-tab").forEach(tab => {
@@ -377,6 +382,7 @@ function refreshStatusUI() {
   if (serverMode === "sweep") statusText.textContent = "Sweeping";
   else if (serverMode === "decode") statusText.textContent = "Decoding";
   else if (serverMode === "capture") statusText.textContent = "Recording";
+  else if (serverMode === "adsb") statusText.textContent = "Tracking";
   else statusText.textContent = "Idle";
   if (serverMode !== "sweep") sweepRateEl.textContent = "0.0 Hz";
 }
@@ -431,6 +437,7 @@ socket.on("status", (s) => {
   if (s.sweep_config) applySweepConfigToInputs(s.sweep_config);
   if (s.decode_config) applyDecodeConfigToInputs(s.decode_config);
   if (s.capture_config) applyCaptureConfigToInputs(s.capture_config);
+  if (s.adsb_config) applyAdsbConfigToInputs(s.adsb_config);
   refreshStatusUI();
 });
 
@@ -783,6 +790,185 @@ socket.on("capture_done", () => {
 socket.on("captures", (msg) => {
   captures = msg.items || [];
   renderCaptures();
+});
+
+// ------------------------------------------------------------------
+// ADS-B mode
+// ------------------------------------------------------------------
+let adsbMap = null;
+let adsbMarkers = new Map();   // hex -> Leaflet marker
+let adsbAircraft = [];
+let adsbFilter = "";
+
+function initAdsbMap() {
+  if (adsbMap) {
+    setTimeout(() => adsbMap.invalidateSize(), 50);
+    return;
+  }
+  // Default to continental US until user provides a location or aircraft appear
+  adsbMap = L.map("adsb-map", {
+    zoomControl: true,
+    attributionControl: true,
+  }).setView([38.9, -77.0], 9);
+
+  // Dark theme tile layer (CARTO Dark Matter — free, no API key)
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    maxZoom: 18,
+    attribution: '&copy; OpenStreetMap, &copy; CARTO',
+    subdomains: "abcd",
+  }).addTo(adsbMap);
+
+  setTimeout(() => adsbMap.invalidateSize(), 50);
+}
+
+function planeIcon(track) {
+  const angle = (track || 0).toFixed(0);
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
+         style="transform: rotate(${angle}deg); filter: drop-shadow(0 0 3px rgba(77,208,225,0.6));">
+      <path d="M12 2 L14.5 12 L22 14 L14 16 L12 22 L10 16 L2 14 L9.5 12 Z"
+            fill="#4dd0e1" stroke="#0a0c10" stroke-width="0.6"/>
+    </svg>`;
+  return L.divIcon({
+    html: svg,
+    className: "ac-icon",
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+}
+
+function fmtAlt(ft) {
+  if (ft == null || ft === "ground") return "—";
+  return `${Number(ft).toLocaleString()}`;
+}
+function fmtKnots(gs) { return gs == null ? "—" : `${Math.round(gs)}`; }
+function fmtTrack(t) { return t == null ? "—" : `${Math.round(t)}°`; }
+function fmtPos(lat, lon) {
+  if (lat == null || lon == null) return "no position";
+  return `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
+}
+function fmtRssi(r) { return r == null ? "—" : `${r.toFixed(0)}`; }
+
+function aircraftMatchesFilter(a) {
+  if (!adsbFilter) return true;
+  const blob = `${a.hex || ""} ${a.flight || ""} ${a.alt_baro || ""}`.toLowerCase();
+  return blob.includes(adsbFilter);
+}
+
+function renderAircraftList() {
+  const list = document.getElementById("aircraft-list");
+  const filtered = adsbAircraft.filter(aircraftMatchesFilter);
+  if (!adsbAircraft.length) {
+    list.innerHTML = `<div class="event-empty">No aircraft yet. Start ADS-B in the sidebar.</div>`;
+    return;
+  }
+  const header = `<div class="aircraft-header">
+    <span>Hex</span><span>Flight</span><span>Alt (ft)</span>
+    <span>Speed</span><span>Track</span><span>Position</span><span>RSSI</span>
+  </div>`;
+  const rows = filtered
+    .sort((a, b) => (a.seen || 0) - (b.seen || 0))
+    .map(a => {
+      const hasPos = a.lat != null && a.lon != null;
+      return `<div class="ac-row ${hasPos ? "" : "no-pos"}">
+        <span class="ac-hex">${(a.hex || "").toUpperCase()}</span>
+        <span class="ac-flight">${(a.flight || "").trim() || "—"}</span>
+        <span class="ac-alt">${fmtAlt(a.alt_baro)}</span>
+        <span class="ac-spd">${fmtKnots(a.gs)}</span>
+        <span class="ac-track">${fmtTrack(a.track)}</span>
+        <span class="ac-pos">${fmtPos(a.lat, a.lon)}</span>
+        <span class="ac-rssi">${fmtRssi(a.rssi)}</span>
+      </div>`;
+    }).join("");
+  list.innerHTML = header + rows;
+}
+
+function updateAdsbMap(aircraft) {
+  if (!adsbMap) return;
+  const seenHex = new Set();
+  let withPos = 0;
+  for (const a of aircraft) {
+    if (a.lat == null || a.lon == null) continue;
+    withPos++;
+    seenHex.add(a.hex);
+    const flight = (a.flight || "").trim();
+    const popup = `<b>${flight || a.hex.toUpperCase()}</b><br>
+      ${flight ? a.hex.toUpperCase() + "<br>" : ""}
+      Alt: ${fmtAlt(a.alt_baro)} ft<br>
+      Speed: ${fmtKnots(a.gs)} kts<br>
+      Track: ${fmtTrack(a.track)}<br>
+      RSSI: ${fmtRssi(a.rssi)} dB`;
+    let m = adsbMarkers.get(a.hex);
+    if (!m) {
+      m = L.marker([a.lat, a.lon], { icon: planeIcon(a.track) });
+      m.bindPopup(popup);
+      m.addTo(adsbMap);
+      adsbMarkers.set(a.hex, m);
+    } else {
+      m.setLatLng([a.lat, a.lon]);
+      m.setIcon(planeIcon(a.track));
+      m.setPopupContent(popup);
+    }
+  }
+  // remove markers for aircraft no longer present
+  for (const [hex, m] of adsbMarkers.entries()) {
+    if (!seenHex.has(hex)) {
+      adsbMap.removeLayer(m);
+      adsbMarkers.delete(hex);
+    }
+  }
+  const statsEl = document.getElementById("adsb-stats");
+  if (statsEl) statsEl.textContent = `${aircraft.length} tracked · ${withPos} with position`;
+}
+
+document.getElementById("adsb_gain").addEventListener("input", e => {
+  document.getElementById("adsb_gain_val").textContent = `${e.target.value} dB`;
+  updateSliderFills(["adsb_gain"]);
+});
+updateSliderFills(["adsb_gain"]);
+
+document.getElementById("adsb-filter").addEventListener("input", e => {
+  adsbFilter = e.target.value.trim().toLowerCase();
+  renderAircraftList();
+});
+
+function readAdsbConfig() {
+  const lat = parseFloat(document.getElementById("adsb_lat").value);
+  const lon = parseFloat(document.getElementById("adsb_lon").value);
+  return {
+    gain_db: parseInt(document.getElementById("adsb_gain").value, 10),
+    rx_lat: Number.isFinite(lat) ? lat : null,
+    rx_lon: Number.isFinite(lon) ? lon : null,
+  };
+}
+function applyAdsbConfigToInputs(c) {
+  if (c.gain_db != null) {
+    document.getElementById("adsb_gain").value = c.gain_db;
+    document.getElementById("adsb_gain_val").textContent = `${c.gain_db} dB`;
+    updateSliderFills(["adsb_gain"]);
+  }
+  if (c.rx_lat != null) document.getElementById("adsb_lat").value = c.rx_lat;
+  if (c.rx_lon != null) document.getElementById("adsb_lon").value = c.rx_lon;
+}
+
+document.getElementById("btn-start-adsb").addEventListener("click", () => {
+  const cfg = readAdsbConfig();
+  socket.emit("start_adsb", cfg);
+  // also re-center map if location provided
+  if (cfg.rx_lat != null && cfg.rx_lon != null && adsbMap) {
+    adsbMap.setView([cfg.rx_lat, cfg.rx_lon], 9);
+  }
+});
+document.getElementById("btn-stop-adsb").addEventListener("click", () => {
+  socket.emit("stop");
+});
+
+socket.on("adsb", (msg) => {
+  adsbAircraft = msg.aircraft || [];
+  if (currentMode === "adsb") {
+    updateAdsbMap(adsbAircraft);
+    renderAircraftList();
+  }
 });
 
 // initial
