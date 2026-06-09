@@ -390,6 +390,12 @@ function refreshStatusUI() {
   else if (serverMode === "scan") statusText.textContent = "Auto-Scanning";
   else statusText.textContent = "Idle";
   if (serverMode !== "sweep") sweepRateEl.textContent = "0.0 Hz";
+
+  // Light up the tab whose mode is actually running, even when the user
+  // is viewing a different tab.
+  document.querySelectorAll(".mode-tab").forEach(t => {
+    t.classList.toggle("is-running", t.dataset.mode === serverMode);
+  });
 }
 
 // ------------------------------------------------------------------
@@ -548,6 +554,19 @@ function applyGainsToCaptureUI(lna, vga, amp) {
   updateSliderFills(["cap_lna", "cap_vga"]);
 }
 
+// Debounce helper — coalesce rapid clicks into a single backend call.
+// Without this, accidental double-clicks tear down + restart the HackRF
+// subprocess multiple times in a row, which is slow and sometimes leaks.
+function debounce(fn, ms) {
+  let timer = null;
+  return (...args) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; fn(...args); }, ms);
+  };
+}
+
+const emitStartSweep = debounce(() => socket.emit("start_sweep", readSweepConfig()), 250);
+
 // preset chips (sweep mode)
 document.querySelectorAll(".chip").forEach(b => {
   b.addEventListener("click", () => {
@@ -562,7 +581,7 @@ document.querySelectorAll(".chip").forEach(b => {
       );
     }
     highlightPreset(readSweepConfig());
-    socket.emit("start_sweep", readSweepConfig());
+    emitStartSweep();
   });
 });
 

@@ -295,11 +295,10 @@ class AutoScanner:
 
     # -------------------- helpers ------------------------------------
     def _sleep_with_progress(self, phase: str, duration_s: float) -> None:
-        # Emit per-second progress so the UI's bar can animate
+        # Emit per-half-second progress so the UI's bar can animate, but
+        # interrupt instantly when stop() fires.
         start = time.time()
         while True:
-            if self._stop.is_set():
-                return
             elapsed = time.time() - start
             if elapsed >= duration_s:
                 return
@@ -309,4 +308,5 @@ class AutoScanner:
                 "duration_s": duration_s,
                 "pct": round(min(100.0, elapsed / duration_s * 100), 1),
             })
-            time.sleep(0.5)
+            if self._stop.wait(0.5):
+                return

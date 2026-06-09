@@ -1,14 +1,20 @@
 """Flask + Socket.IO server.
 
-Streams HackRF sweep rows, rtl_433 events, and IQ captures. All three
-operations require exclusive access to the HackRF and are mutually
-exclusive. A background poller emits device_status so the UI knows
+Single source of truth for HackRF state. All sweep/decode/capture/adsb/
+scan jobs are mutually exclusive: only one can hold the HackRF at a
+time. State mutations are serialized by a reentrant lock so concurrent
+socket handlers can't interleave and leak subprocesses.
+
+Background poller emits device_status every 2.5 s so the UI knows
 whether a HackRF is plugged in.
 """
 
 from __future__ import annotations
 
+import atexit
 import logging
+import signal
+import sys
 import threading
 import time
 from dataclasses import asdict
@@ -38,6 +44,15 @@ app.config["SECRET_KEY"] = "dev-local-only"
 socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=[])
 
 DEVICE_POLL_INTERVAL = 2.5
+
+# Reentrant: callers nest with-blocks (e.g., _start_sweep calls _stop_all_locked
+# while already holding the lock).
+_state_lock = threading.RLock()
+
+# Monotonic generation counter — bumped on every successful job start.
+# on_exit callbacks check this to ignore stale completions from jobs
+# that have already been superseded.
+_current_job_gen = 0
 
 _state: dict = {
     "mode": "idle",             # "idle" | "sweep" | "decode" | "capture" | "adsb" | "scan"
@@ -76,17 +91,16 @@ def _emit_event(event: dict) -> None:
 
 
 def _emit_status() -> None:
-    socketio.emit(
-        "status",
-        {
+    with _state_lock:
+        snapshot = {
             "mode": _state["mode"],
             "sweep_config": asdict(_state["sweep_config"]),
             "decode_config": asdict(_state["decode_config"]),
             "capture_config": asdict(_state["capture_config"]),
             "adsb_config": asdict(_state["adsb_config"]),
             "scan_config": _state["scan_config"].__dict__,
-        },
-    )
+        }
+    socketio.emit("status", snapshot)
 
 
 def _emit_device_status() -> None:
@@ -122,86 +136,84 @@ def _emit_scan(name: str, payload: dict) -> None:
 
 
 # ------------------------------------------------------------------
-# Job control
+# Job lifecycle — all locked
 # ------------------------------------------------------------------
 
-def _stop_all() -> None:
-    """Snapshot active jobs, mark idle, broadcast, then tear down.
-
-    The teardown is what's slow (subprocess termination + thread joins,
-    up to ~4 s for ADS-B). Marking idle and broadcasting up front means
-    the UI flips to "Idle" within a tick instead of looking frozen.
+def _stop_all_locked() -> None:
+    """Snapshot all active jobs, clear them from _state, broadcast 'idle',
+    then synchronously tear down subprocesses. Caller MUST hold _state_lock.
     """
-    streamer = _state["streamer"]
-    decoder  = _state["decoder"]
-    capture  = _state["capture"]
-    adsb     = _state["adsb"]
-    scanner  = _state["scanner"]
+    jobs = []
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner"):
+        if _state[slot]:
+            jobs.append((slot, _state[slot]))
+
     was_scanning = _state["mode"] == "scan"
 
-    _state["streamer"] = None
-    _state["decoder"]  = None
-    _state["capture"]  = None
-    _state["adsb"]     = None
-    _state["scanner"]  = None
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner"):
+        _state[slot] = None
     _state["mode"] = "idle"
 
-    # Tell clients immediately — don't make them wait for subprocess cleanup
+    # UI gets immediate feedback while subprocess termination happens after.
     _emit_status()
     if was_scanning:
         socketio.emit("scan_stopped", {})
 
-    if streamer: streamer.stop()
-    if decoder:  decoder.stop()
-    if capture:  capture.cancel()
-    if adsb:     adsb.stop()
-    if scanner:  scanner.stop()
+    for name, job in jobs:
+        try:
+            if hasattr(job, "cancel"):
+                job.cancel()
+            else:
+                job.stop()
+        except Exception:
+            log.exception("teardown of %s failed", name)
 
 
-def _on_sweep_exit(reason: str) -> None:
-    if reason == "died":
-        _emit_toast("error", "Sweep stopped: hackrf_sweep exited unexpectedly. Is the HackRF still connected?")
-    _state["streamer"] = None
-    if _state["mode"] == "sweep":
-        _state["mode"] = "idle"
+def _next_gen_locked() -> int:
+    """Caller MUST hold _state_lock. Returns a fresh generation id."""
+    global _current_job_gen
+    _current_job_gen += 1
+    return _current_job_gen
+
+
+def _make_exit_handler(slot: str, gen: int, label: str):
+    """Returns an on_exit callback that only acts if it's still the
+    current generation. Avoids clobbering state when a stale subprocess
+    finishes its teardown after a new job has already taken its slot.
+    """
+    def on_exit(reason: str) -> None:
+        if reason == "stopped":
+            return  # we initiated this, state is already correct
+        # "died" — subprocess exited unexpectedly
+        with _state_lock:
+            if gen != _current_job_gen:
+                return  # superseded
+            _state[slot] = None
+            _state["mode"] = "idle"
+        # If the device is gone, the disconnect toast covers this.
+        if _device["info"] is not None:
+            _emit_toast("error", f"{label} stopped unexpectedly.")
         _emit_status()
-
-
-def _on_decode_exit(reason: str) -> None:
-    if reason == "died":
-        _emit_toast("error", "Decoder stopped: rtl_433 exited unexpectedly. Is the HackRF still connected?")
-    _state["decoder"] = None
-    if _state["mode"] == "decode":
-        _state["mode"] = "idle"
-        _emit_status()
-
-
-def _on_capture_done(record, reason: str) -> None:
-    _state["capture"] = None
-    if _state["mode"] == "capture":
-        _state["mode"] = "idle"
-        _emit_status()
-    if reason == "completed":
-        size_mb = record.file_size / (1024 * 1024)
-        _emit_toast("info", f"Capture done: {record.name} ({size_mb:.1f} MB)")
-    elif reason == "cancelled":
-        _emit_toast("warn", f"Capture cancelled: {record.name}")
-    else:  # died
-        _emit_toast("error", f"Capture failed: {record.name} (HackRF disconnected?)")
-    socketio.emit("capture_done", {"record": asdict(record), "reason": reason})
-    _emit_captures_list()
+    return on_exit
 
 
 def _start_sweep(cfg: SweepConfig) -> bool:
     if _device["info"] is None:
         _emit_toast("error", "Cannot start: HackRF not detected.")
         return False
-    _stop_all()
-    _state["sweep_config"] = cfg
-    streamer = SweepStreamer(cfg, on_sweep=_emit_sweep, on_exit=_on_sweep_exit)
-    streamer.start()
-    _state["streamer"] = streamer
-    _state["mode"] = "sweep"
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+        _state["sweep_config"] = cfg
+        streamer = SweepStreamer(
+            cfg,
+            on_sweep=_emit_sweep,
+            on_exit=_make_exit_handler("streamer", gen, "Sweep"),
+        )
+        _state["streamer"] = streamer
+        _state["mode"] = "sweep"
+        streamer.start()
+    _emit_status()
     return True
 
 
@@ -209,56 +221,19 @@ def _start_decode(cfg: DecodeConfig) -> bool:
     if _device["info"] is None:
         _emit_toast("error", "Cannot start: HackRF not detected.")
         return False
-    _stop_all()
-    _state["decode_config"] = cfg
-    decoder = Rtl433Decoder(cfg, on_event=_emit_event, on_exit=_on_decode_exit)
-    decoder.start()
-    _state["decoder"] = decoder
-    _state["mode"] = "decode"
-    return True
-
-
-def _start_scan(cfg: ScanConfig) -> bool:
-    if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected.")
-        return False
-    _stop_all()
-    _state["scan_config"] = cfg
-
-    def on_scan_event(name: str, payload: dict) -> None:
-        if name == "scan_completed" or name == "scan_failed":
-            _state["scanner"] = None
-            if _state["mode"] == "scan":
-                _state["mode"] = "idle"
-                _emit_status()
-        _emit_scan(name, payload)
-
-    scanner = AutoScanner(cfg, on_event=on_scan_event)
-    scanner.start()
-    _state["scanner"] = scanner
-    _state["mode"] = "scan"
-    return True
-
-
-def _on_adsb_exit(reason: str) -> None:
-    if reason == "died":
-        _emit_toast("error", "ADS-B stopped: readsb exited unexpectedly. Is the HackRF still connected?")
-    _state["adsb"] = None
-    if _state["mode"] == "adsb":
-        _state["mode"] = "idle"
-        _emit_status()
-
-
-def _start_adsb(cfg: AdsbConfig) -> bool:
-    if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected.")
-        return False
-    _stop_all()
-    _state["adsb_config"] = cfg
-    recv = AdsbReceiver(cfg, on_update=_emit_adsb, on_exit=_on_adsb_exit)
-    recv.start()
-    _state["adsb"] = recv
-    _state["mode"] = "adsb"
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+        _state["decode_config"] = cfg
+        decoder = Rtl433Decoder(
+            cfg,
+            on_event=_emit_event,
+            on_exit=_make_exit_handler("decoder", gen, "Decoder"),
+        )
+        _state["decoder"] = decoder
+        _state["mode"] = "decode"
+        decoder.start()
+    _emit_status()
     return True
 
 
@@ -266,22 +241,115 @@ def _start_capture(cfg: CaptureConfig) -> bool:
     if _device["info"] is None:
         _emit_toast("error", "Cannot start: HackRF not detected.")
         return False
-    _stop_all()
-    _state["capture_config"] = cfg
-    cap = IqCapture(cfg, on_progress=_emit_capture_progress, on_done=_on_capture_done)
-    record = cap.start()
-    _state["capture"] = cap
-    _state["mode"] = "capture"
-    socketio.emit("capture_started", {"record": asdict(record)})
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+        _state["capture_config"] = cfg
+
+        def on_done(record, reason: str) -> None:
+            with _state_lock:
+                # Only act if we're still the current capture
+                if gen == _current_job_gen and _state["capture"] is not None:
+                    _state["capture"] = None
+                    if _state["mode"] == "capture":
+                        _state["mode"] = "idle"
+                        emit_status_after = True
+                    else:
+                        emit_status_after = False
+                else:
+                    emit_status_after = False
+            if reason == "completed":
+                size_mb = record.file_size / (1024 * 1024)
+                _emit_toast("info", f"Capture done: {record.name} ({size_mb:.1f} MB)")
+            elif reason == "cancelled":
+                _emit_toast("warn", f"Capture cancelled: {record.name}")
+            else:
+                if _device["info"] is not None:
+                    _emit_toast("error", f"Capture failed: {record.name}")
+            socketio.emit("capture_done", {"record": asdict(record), "reason": reason})
+            _emit_captures_list()
+            if emit_status_after:
+                _emit_status()
+
+        cap = IqCapture(cfg, on_progress=_emit_capture_progress, on_done=on_done)
+        record = cap.start()
+        _state["capture"] = cap
+        _state["mode"] = "capture"
+        socketio.emit("capture_started", {"record": asdict(record)})
+    _emit_status()
     return True
+
+
+def _start_adsb(cfg: AdsbConfig) -> bool:
+    if _device["info"] is None:
+        _emit_toast("error", "Cannot start: HackRF not detected.")
+        return False
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+        _state["adsb_config"] = cfg
+        recv = AdsbReceiver(
+            cfg,
+            on_update=_emit_adsb,
+            on_exit=_make_exit_handler("adsb", gen, "ADS-B"),
+        )
+        _state["adsb"] = recv
+        _state["mode"] = "adsb"
+        recv.start()
+    _emit_status()
+    return True
+
+
+def _start_scan(cfg: ScanConfig) -> bool:
+    if _device["info"] is None:
+        _emit_toast("error", "Cannot start: HackRF not detected.")
+        return False
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+        _state["scan_config"] = cfg
+
+        def on_scan_event(name: str, payload: dict) -> None:
+            if name in ("scan_completed", "scan_failed"):
+                with _state_lock:
+                    if gen == _current_job_gen and _state["scanner"] is not None:
+                        _state["scanner"] = None
+                        if _state["mode"] == "scan":
+                            _state["mode"] = "idle"
+                            emit_after = True
+                        else:
+                            emit_after = False
+                    else:
+                        emit_after = False
+                _emit_scan(name, payload)
+                if emit_after:
+                    _emit_status()
+            else:
+                _emit_scan(name, payload)
+
+        scanner = AutoScanner(cfg, on_event=on_scan_event)
+        _state["scanner"] = scanner
+        _state["mode"] = "scan"
+        scanner.start()
+    _emit_status()
+    return True
+
+
+def _stop_all_external() -> None:
+    """Public stop entry point: lock + tear down."""
+    with _state_lock:
+        _stop_all_locked()
 
 
 # ------------------------------------------------------------------
 # Background device poller
 # ------------------------------------------------------------------
 
+_SENTINEL = object()
+
+
 def _device_poller() -> None:
-    last_serial: object = object()
+    last_serial: object = _SENTINEL
     while True:
         try:
             info = probe_hackrf()
@@ -291,14 +359,35 @@ def _device_poller() -> None:
         _device["info"] = info
         _device["checked_at"] = time.time()
         _emit_device_status()
+
         new_serial = info.get("serial") if info else None
-        if last_serial is not object and new_serial != last_serial:
+        if last_serial is not _SENTINEL and new_serial != last_serial:
             if info:
-                _emit_toast("info", f"HackRF connected ({info.get('serial', '?')[-6:].upper()})")
+                tail = info.get("serial", "?")[-6:].upper()
+                _emit_toast("info", f"HackRF connected ({tail})")
             else:
                 _emit_toast("warn", "HackRF disconnected")
         last_serial = new_serial
         time.sleep(DEVICE_POLL_INTERVAL)
+
+
+# ------------------------------------------------------------------
+# Shutdown handling
+# ------------------------------------------------------------------
+
+_shutdown_done = threading.Event()
+
+
+def _shutdown(*_args) -> None:
+    """Stop all subprocesses on app exit. Safe to call multiple times."""
+    if _shutdown_done.is_set():
+        return
+    _shutdown_done.set()
+    log.info("shutting down — stopping any active jobs")
+    try:
+        _stop_all_external()
+    except Exception:
+        log.exception("error during shutdown cleanup")
 
 
 # ------------------------------------------------------------------
@@ -322,14 +411,16 @@ def api_captures():
 
 @socketio.on("connect")
 def on_connect():
-    emit("status", {
-        "mode": _state["mode"],
-        "sweep_config": asdict(_state["sweep_config"]),
-        "decode_config": asdict(_state["decode_config"]),
-        "capture_config": asdict(_state["capture_config"]),
-        "adsb_config": asdict(_state["adsb_config"]),
-        "scan_config": _state["scan_config"].__dict__,
-    })
+    with _state_lock:
+        snapshot = {
+            "mode": _state["mode"],
+            "sweep_config": asdict(_state["sweep_config"]),
+            "decode_config": asdict(_state["decode_config"]),
+            "capture_config": asdict(_state["capture_config"]),
+            "adsb_config": asdict(_state["adsb_config"]),
+            "scan_config": _state["scan_config"].__dict__,
+        }
+    emit("status", snapshot)
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
     emit("captures", {"items": list_captures()})
 
@@ -341,45 +432,67 @@ def _filter_payload(data, cls):
 
 @socketio.on("start_sweep")
 def on_start_sweep(data):
-    if _start_sweep(SweepConfig(**_filter_payload(data, SweepConfig))):
-        _emit_status()
+    try:
+        cfg = SweepConfig(**_filter_payload(data, SweepConfig))
+    except (TypeError, ValueError) as e:
+        _emit_toast("error", f"Invalid sweep config: {e}")
+        return
+    _start_sweep(cfg)
 
 
 @socketio.on("start_decode")
 def on_start_decode(data):
-    if _start_decode(DecodeConfig(**_filter_payload(data, DecodeConfig))):
-        _emit_status()
+    try:
+        cfg = DecodeConfig(**_filter_payload(data, DecodeConfig))
+    except (TypeError, ValueError) as e:
+        _emit_toast("error", f"Invalid decode config: {e}")
+        return
+    _start_decode(cfg)
 
 
 @socketio.on("start_capture")
 def on_start_capture(data):
-    if _start_capture(CaptureConfig(**_filter_payload(data, CaptureConfig))):
-        _emit_status()
+    try:
+        cfg = CaptureConfig(**_filter_payload(data, CaptureConfig))
+    except (TypeError, ValueError) as e:
+        _emit_toast("error", f"Invalid capture config: {e}")
+        return
+    _start_capture(cfg)
 
 
 @socketio.on("start_adsb")
 def on_start_adsb(data):
-    if _start_adsb(AdsbConfig(**_filter_payload(data, AdsbConfig))):
-        _emit_status()
+    try:
+        cfg = AdsbConfig(**_filter_payload(data, AdsbConfig))
+    except (TypeError, ValueError) as e:
+        _emit_toast("error", f"Invalid ADS-B config: {e}")
+        return
+    _start_adsb(cfg)
 
 
 @socketio.on("start_scan")
 def on_start_scan(data):
-    cfg = ScanConfig(**_filter_payload(data, ScanConfig))
-    if _start_scan(cfg):
-        _emit_status()
+    try:
+        cfg = ScanConfig(**_filter_payload(data, ScanConfig))
+    except (TypeError, ValueError) as e:
+        _emit_toast("error", f"Invalid scan config: {e}")
+        return
+    _start_scan(cfg)
 
 
 @socketio.on("cancel_capture")
 def on_cancel_capture():
-    if _state["capture"]:
-        _state["capture"].cancel()
+    with _state_lock:
+        if _state["capture"]:
+            try:
+                _state["capture"].cancel()
+            except Exception:
+                log.exception("cancel_capture failed")
 
 
 @socketio.on("stop")
 def on_stop():
-    # _stop_all already emits status as the first thing it does
-    _stop_all()
+    _stop_all_external()
 
 
 @socketio.on("refresh_device")
@@ -388,6 +501,7 @@ def on_refresh_device():
         _device["info"] = probe_hackrf()
         _device["checked_at"] = time.time()
     except Exception:
+        log.exception("manual device refresh failed")
         _device["info"] = None
     _emit_device_status()
 
@@ -407,6 +521,14 @@ def on_delete_capture(data):
 
 def main() -> None:
     log.info("hackrf-web listening on http://127.0.0.1:8765")
+    # Register cleanup for graceful shutdown so we don't orphan subprocesses
+    # holding the HackRF when launchd sends SIGTERM.
+    atexit.register(_shutdown)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, lambda *_: (_shutdown(), sys.exit(0)))
+        except (OSError, ValueError):
+            pass  # not running on main thread; atexit still covers most cases
     threading.Thread(target=_device_poller, daemon=True).start()
     socketio.run(app, host="127.0.0.1", port=8765, debug=False, allow_unsafe_werkzeug=True)
 

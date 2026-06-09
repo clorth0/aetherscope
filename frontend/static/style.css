@@ -189,6 +189,28 @@ html, body {
   box-shadow: 0 0 8px var(--accent-glow);
 }
 
+/* Tiny green pulsing dot showing which mode is *actually* running on the
+   backend, regardless of which tab the user is currently viewing. */
+.tab-running-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: transparent;
+  margin-right: 6px;
+  vertical-align: middle;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.mode-tab.is-running .tab-running-dot {
+  background: var(--good);
+  box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.5);
+  animation: pulse 1.6s ease-out infinite;
+}
+.mode-tab.is-running:not(.active) {
+  border-bottom: 2px solid var(--good);
+  padding-bottom: 4px;
+}
+
 .stat {
   display: flex;
   flex-direction: column;

@@ -120,7 +120,10 @@ class AdsbReceiver:
                         log.exception("on_update callback failed")
             except (OSError, json.JSONDecodeError):
                 pass
-            time.sleep(POLL_INTERVAL)
+            # Event-based wait so stop() interrupts immediately instead of
+            # making the user wait up to POLL_INTERVAL seconds.
+            if self._stop.wait(POLL_INTERVAL):
+                break
 
         log.info("adsb receiver exiting")
         if self.on_exit:
