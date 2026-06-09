@@ -60,6 +60,35 @@ Then open <http://127.0.0.1:8765/>.
 - `backend/app.py` exposes a Socket.IO server. Clients send `start`/`stop` with a `SweepConfig`; server streams `sweep` events.
 - `frontend/static/waterfall.js` renders the FFT line plot and scrolling waterfall on `<canvas>`.
 
+## Running as a service (macOS launchd)
+
+`hackrf-web` ships with a launchd plist that keeps it running, restarts
+it on crash, and starts it automatically at login. Install:
+
+```sh
+cp deploy/com.clorth0.hackrf-web.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.clorth0.hackrf-web.plist
+launchctl kickstart -k gui/$(id -u)/com.clorth0.hackrf-web
+```
+
+Edit the absolute paths in the plist if you cloned the repo somewhere
+other than `~/hackrf-web`.
+
+Useful commands:
+
+```sh
+launchctl print     gui/$(id -u)/com.clorth0.hackrf-web   # status, last exit, pid
+launchctl kickstart -k gui/$(id -u)/com.clorth0.hackrf-web   # restart
+launchctl kill SIGTERM gui/$(id -u)/com.clorth0.hackrf-web   # stop (launchd will respawn)
+launchctl bootout      gui/$(id -u)/com.clorth0.hackrf-web   # disable and unload
+tail -f ~/Library/Logs/hackrf-web/stderr.log               # follow logs
+```
+
+Not Dockerized intentionally — macOS Docker Desktop cannot pass USB
+devices to containers, so the HackRF can only be reached by host-native
+processes. On Linux, a Dockerfile would be straightforward and is on
+the roadmap.
+
 ## Roadmap
 
 - `rtl_433` decoder integration for ISM-band IoT chatter

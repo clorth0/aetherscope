@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd LaunchAgent definition for hackrf-web.
+
+  Install:
+    cp deploy/com.clorth0.hackrf-web.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.clorth0.hackrf-web.plist
+    launchctl kickstart -k gui/$(id -u)/com.clorth0.hackrf-web
+
+  Stop / start / status:
+    launchctl kickstart -k gui/$(id -u)/com.clorth0.hackrf-web   # restart
+    launchctl kill SIGTERM gui/$(id -u)/com.clorth0.hackrf-web   # stop process (launchd will respawn)
+    launchctl bootout   gui/$(id -u)/com.clorth0.hackrf-web      # disable & unload
+    launchctl print     gui/$(id -u)/com.clorth0.hackrf-web      # status + last exit code
+
+  Logs:
+    ~/Library/Logs/hackrf-web/stdout.log
+    ~/Library/Logs/hackrf-web/stderr.log
+
+  Edit the absolute paths below if you cloned the repo somewhere other than
+  /Users/matt-admin/hackrf-web. Then unload + reload the plist to pick up changes.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.clorth0.hackrf-web</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/matt-admin/hackrf-web</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/matt-admin/.local/bin/uv</string>
+        <string>run</string>
+        <string>hackrf-web</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/matt-admin/Library/Logs/hackrf-web/stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/matt-admin/Library/Logs/hackrf-web/stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/matt-admin/.local/bin</string>
+        <key>HOME</key>
+        <string>/Users/matt-admin</string>
+    </dict>
+</dict>
+</plist>
