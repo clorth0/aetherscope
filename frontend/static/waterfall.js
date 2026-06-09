@@ -19,8 +19,9 @@ let sweepTimestamps = [];
 
 const POWER_MIN = -100;
 const POWER_MAX = -20;
-const FFT_PADDING = { top: 14, right: 12, bottom: 22, left: 56 };
-const WF_PADDING  = { top: 0,  right: 12, bottom: 22, left: 56 };
+const FFT_PADDING = { top: 16, right: 14, bottom: 28, left: 64 };
+const WF_PADDING  = { top: 0,  right: 14, bottom: 28, left: 64 };
+const AXIS_FONT   = "12px ui-monospace, 'SF Mono', Menlo, monospace";
 
 const DPR = Math.max(window.devicePixelRatio || 1, 1);
 
@@ -152,8 +153,8 @@ function drawFFT(powers) {
   };
 
   // dB grid
-  fftCtx.font = "10px ui-monospace, 'SF Mono', Menlo, monospace";
-  fftCtx.fillStyle = "#5a6273";
+  fftCtx.font = AXIS_FONT;
+  fftCtx.fillStyle = "#8a93a6";
   fftCtx.textBaseline = "middle";
   fftCtx.textAlign = "right";
   for (let dB = POWER_MIN; dB <= POWER_MAX; dB += 20) {
@@ -181,8 +182,8 @@ function drawFFT(powers) {
       fftCtx.moveTo(x + 0.5, plot.y);
       fftCtx.lineTo(x + 0.5, plot.y + plot.h);
       fftCtx.stroke();
-      fftCtx.fillStyle = "#5a6273";
-      fftCtx.fillText(fmtFreq(f), x, plot.y + plot.h + 4);
+      fftCtx.fillStyle = "#8a93a6";
+      fftCtx.fillText(fmtFreq(f), x, plot.y + plot.h + 6);
     }
   }
 
@@ -288,14 +289,14 @@ function pushWaterfallRow(powers) {
   // axis labels on waterfall
   if (lastSweep) {
     wfCtx.clearRect(0, plot.y + plot.h, w, h - plot.y - plot.h);
-    wfCtx.font = "10px ui-monospace, 'SF Mono', Menlo, monospace";
-    wfCtx.fillStyle = "#5a6273";
+    wfCtx.font = AXIS_FONT;
+    wfCtx.fillStyle = "#8a93a6";
     wfCtx.textAlign = "center";
     wfCtx.textBaseline = "top";
-    const ticks = niceTicks(lastSweep.f0, lastSweep.f1, Math.max(4, Math.floor(plot.w / 110)));
+    const ticks = niceTicks(lastSweep.f0, lastSweep.f1, Math.max(4, Math.floor(plot.w / 130)));
     for (const f of ticks) {
       const x = plot.x + ((f - lastSweep.f0) / (lastSweep.f1 - lastSweep.f0)) * plot.w;
-      wfCtx.fillText(fmtFreq(f), x, plot.y + plot.h + 4);
+      wfCtx.fillText(fmtFreq(f), x, plot.y + plot.h + 6);
     }
     wfCtx.textAlign = "right";
     wfCtx.textBaseline = "middle";
