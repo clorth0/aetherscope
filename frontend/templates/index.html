@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>hackrf-web</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+<header>
+  <h1>hackrf-web</h1>
+  <span id="status" class="status-dot stopped" title="stopped"></span>
+</header>
+
+<section id="controls">
+  <label>Start MHz <input id="f_start" type="number" value="88" min="1" max="6000" /></label>
+  <label>Stop MHz <input id="f_stop" type="number" value="1000" min="1" max="6000" /></label>
+  <label>Bin Hz <input id="bin_width" type="number" value="500000" min="1000" step="1000" /></label>
+  <label>LNA <input id="lna" type="number" value="16" min="0" max="40" step="8" /></label>
+  <label>VGA <input id="vga" type="number" value="20" min="0" max="62" step="2" /></label>
+  <label>Amp <input id="amp" type="checkbox" /></label>
+  <button id="btn-start">Start</button>
+  <button id="btn-stop">Stop</button>
+</section>
+
+<section id="readout">
+  <span id="hover-freq">—</span>
+  <span id="hover-power">—</span>
+  <span id="sweep-rate">0 Hz</span>
+</section>
+
+<canvas id="fft" width="1200" height="180"></canvas>
+<canvas id="waterfall" width="1200" height="500"></canvas>
+
+<script src="{{ url_for('static', filename='waterfall.js') }}"></script>
+</body>
+</html>
