@@ -43,6 +43,26 @@ app = Flask(
 app.config["SECRET_KEY"] = "dev-local-only"
 socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=[])
 
+# Server-startup timestamp used to bust browser caches whenever the
+# service restarts (so users can't get stuck on stale JS/CSS).
+APP_VERSION = str(int(time.time()))
+
+
+@app.context_processor
+def _inject_version():
+    return {"app_version": APP_VERSION}
+
+
+@app.after_request
+def _no_cache_static(resp):
+    # Static assets are tiny and we always want the newest version after
+    # a service restart. Tell browsers not to keep them.
+    if resp.headers.get("Content-Type", "").startswith(("application/javascript", "text/css")):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
 DEVICE_POLL_INTERVAL = 2.5
 
 # Reentrant: callers nest with-blocks (e.g., _start_sweep calls _stop_all_locked
