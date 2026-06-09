@@ -1056,6 +1056,10 @@ socket.on("scan_completed", (s) => {
 socket.on("scan_failed", () => {
   scanResultsEl.innerHTML = `<div class="event-empty">Scan failed.</div>`;
 });
+socket.on("scan_stopped", () => {
+  resetPhases();
+  scanResultsEl.innerHTML = `<div class="event-empty">Scan stopped. Hit Start Scan to run again.</div>`;
+});
 
 function fmtFreqHz(hz) {
   if (hz >= 1e9) return `${(hz / 1e9).toFixed(3)} GHz`;

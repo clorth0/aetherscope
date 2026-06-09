@@ -126,22 +126,36 @@ def _emit_scan(name: str, payload: dict) -> None:
 # ------------------------------------------------------------------
 
 def _stop_all() -> None:
-    if _state["streamer"]:
-        _state["streamer"].stop()
-        _state["streamer"] = None
-    if _state["decoder"]:
-        _state["decoder"].stop()
-        _state["decoder"] = None
-    if _state["capture"]:
-        _state["capture"].cancel()
-        _state["capture"] = None
-    if _state["adsb"]:
-        _state["adsb"].stop()
-        _state["adsb"] = None
-    if _state["scanner"]:
-        _state["scanner"].stop()
-        _state["scanner"] = None
+    """Snapshot active jobs, mark idle, broadcast, then tear down.
+
+    The teardown is what's slow (subprocess termination + thread joins,
+    up to ~4 s for ADS-B). Marking idle and broadcasting up front means
+    the UI flips to "Idle" within a tick instead of looking frozen.
+    """
+    streamer = _state["streamer"]
+    decoder  = _state["decoder"]
+    capture  = _state["capture"]
+    adsb     = _state["adsb"]
+    scanner  = _state["scanner"]
+    was_scanning = _state["mode"] == "scan"
+
+    _state["streamer"] = None
+    _state["decoder"]  = None
+    _state["capture"]  = None
+    _state["adsb"]     = None
+    _state["scanner"]  = None
     _state["mode"] = "idle"
+
+    # Tell clients immediately — don't make them wait for subprocess cleanup
+    _emit_status()
+    if was_scanning:
+        socketio.emit("scan_stopped", {})
+
+    if streamer: streamer.stop()
+    if decoder:  decoder.stop()
+    if capture:  capture.cancel()
+    if adsb:     adsb.stop()
+    if scanner:  scanner.stop()
 
 
 def _on_sweep_exit(reason: str) -> None:
@@ -364,8 +378,8 @@ def on_cancel_capture():
 
 @socketio.on("stop")
 def on_stop():
+    # _stop_all already emits status as the first thing it does
     _stop_all()
-    _emit_status()
 
 
 @socketio.on("refresh_device")
