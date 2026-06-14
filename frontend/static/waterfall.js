@@ -544,6 +544,43 @@ socket.on("toast", (t) => {
 
 devicePill.addEventListener("click", () => socket.emit("refresh_device"));
 
+// ---- GPS geotagging pill (opt-in, default off) -------------------------
+const gpsPill = document.getElementById("gps-pill");
+const gpsDot = document.getElementById("gps-dot");
+const gpsText = document.getElementById("gps-text");
+let gpsState = { enabled: false };
+
+function renderGps(s) {
+  gpsState = s || { enabled: false };
+  gpsPill.classList.remove("connected", "disconnected", "probing");
+  gpsDot.classList.remove("running", "stopped", "warn");
+  if (!gpsState.enabled) {
+    gpsDot.classList.add("stopped");
+    gpsText.textContent = "GPS off";
+    gpsPill.title = "GPS geotagging is off. Captures are not stamped with your location. Click to enable.";
+  } else if (gpsState.lat != null && !gpsState.stale) {
+    const fix = gpsState.mode >= 3 ? "3D" : "2D";
+    const sat = gpsState.sats != null ? ` · ${gpsState.sats} sat` : "";
+    gpsPill.classList.add("connected");
+    gpsDot.classList.add("running");
+    gpsText.textContent = `GPS ${fix}${sat}`;
+    // Coords masked on screen; revealed only on hover, leading with "ON".
+    const alt = gpsState.alt != null ? ` · ${gpsState.alt.toFixed(0)} m` : "";
+    const hd = gpsState.hdop != null ? `\nhdop ${gpsState.hdop}` : "";
+    gpsPill.title = `Geotagging ON — captures are stamped with your location.\n` +
+      `${gpsState.lat.toFixed(6)}, ${gpsState.lon.toFixed(6)}${alt}${hd}\nClick to disable.`;
+  } else {
+    gpsDot.classList.add("warn");
+    gpsText.textContent = "GPS no fix";
+    gpsPill.title = "Geotagging ON but no GPS fix yet. Click to disable.";
+  }
+}
+
+socket.on("gps_status", renderGps);
+gpsPill.addEventListener("click", () => {
+  socket.emit("set_setting", { key: "gps_enabled", value: !gpsState.enabled });
+});
+
 function showToast(level, message) {
   const el = document.createElement("div");
   el.className = `toast ${level}`;
@@ -1221,10 +1258,16 @@ function renderCaptures() {
       ? tags.map(t => `<span class="bm-tag">${escapeHtml(t)}</span>`).join(" ")
       : "";
     const missingBadge = c.missing ? `<span class="cap-missing-badge">missing</span>` : "";
+    const geo = c.geolocation;
+    const hasGeo = geo && typeof geo.lat === "number" && typeof geo.lon === "number";
+    const geoBadge = hasGeo
+      ? `<span class="cap-geo-badge" title="lat ${geo.lat.toFixed(6)}, lon ${geo.lon.toFixed(6)}">located</span>`
+      : (c.geolocation_redacted ? `<span class="cap-geo-badge redacted">location removed</span>` : "");
+    const redactBtn = hasGeo ? `<button data-redact="${escapeHtml(c.name)}">Remove location</button>` : "";
     return `
     <div class="cap-row">
       <div class="cap-main">
-        <div class="cap-name">${displayName}${missingBadge}</div>
+        <div class="cap-name">${displayName}${missingBadge}${geoBadge}</div>
         ${tagsHtml ? `<div class="cap-tags">${tagsHtml}</div>` : ""}
         <div class="cap-detail">
           ${fmtMHz(c.freq_hz)}<span class="sep">·</span>
@@ -1238,6 +1281,7 @@ function renderCaptures() {
         <a href="/captures/${encodeURIComponent(c.name)}" download>Download</a>
         <button data-edit="${escapeHtml(c.name)}">Edit</button>
         <button data-replay="${escapeHtml(c.name)}">Replay</button>
+        ${redactBtn}
         <button class="danger" data-delete="${escapeHtml(c.name)}">Delete</button>
       </div>
     </div>
@@ -1275,6 +1319,13 @@ function renderCaptures() {
     btn.addEventListener("click", () => {
       socket.emit("start_replay", { name: btn.dataset.replay });
       setMode("sweep");   // watch the recorded spectrogram in the sweep view
+    });
+  });
+  capturesListEl.querySelectorAll("[data-redact]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (confirm(`Remove GPS location from ${btn.dataset.redact}?`)) {
+        socket.emit("redact_capture", { name: btn.dataset.redact });
+      }
     });
   });
 }
