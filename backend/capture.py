@@ -256,7 +256,7 @@ def redact_location(name: str) -> bool:
     """
     if "/" in name or ".." in name:
         return False
-    base = name.removesuffix(".iq").removesuffix(".json").removesuffix(".sigmf-meta")
+    base = name.removesuffix(".iq").removesuffix(".wav").removesuffix(".json").removesuffix(".sigmf-meta")
     sc = CAPTURES_DIR / f"{base}.json"
     try:
         data = json.loads(sc.read_text())
@@ -285,12 +285,13 @@ def delete_capture(name: str) -> bool:
     """Delete a capture .iq + sidecar by base filename."""
     if "/" in name or ".." in name:
         return False
-    base = name.removesuffix(".iq").removesuffix(".json").removesuffix(".sigmf-meta")
+    base = name.removesuffix(".iq").removesuffix(".wav").removesuffix(".json").removesuffix(".sigmf-meta")
     iq = CAPTURES_DIR / f"{base}.iq"
+    wav = CAPTURES_DIR / f"{base}.wav"
     sc = CAPTURES_DIR / f"{base}.json"
     meta = CAPTURES_DIR / f"{base}.sigmf-meta"
     removed = False
-    for p in (iq, sc, meta):
+    for p in (iq, wav, sc, meta):
         try:
             if p.exists():
                 p.unlink()

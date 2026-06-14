@@ -29,6 +29,7 @@ from flask_socketio import SocketIO, emit
 from .adsb import AdsbConfig, AdsbReceiver
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_error, delete_capture, list_captures, redact_location
 from .gps import GpsClient, coarsen_geolocation
+from .audio_record import start_recording, finalize_recording
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
 from .radio import AUDIO_RATE, RadioConfig, RadioReceiver, RadioScanner, ScanRadioConfig
@@ -143,6 +144,10 @@ _device: dict = {"info": None, "checked_at": 0.0}
 _GPS_FORCED_OFF = os.environ.get("AETHERSCOPE_GPS") == "0"
 _gps = GpsClient(on_status=lambda p: socketio.emit("gps_status", p))
 
+# Active WAV recording of radio audio (None when not recording). Guarded by
+# _state_lock; the recorder's own write() is thread-safe and a no-op after close.
+_audio_rec: dict = {"recorder": None, "record": None}
+
 
 # ------------------------------------------------------------------
 # Emitters
@@ -219,6 +224,38 @@ def _emit_gps_status() -> None:
     socketio.emit("gps_status", _gps.position())
 
 
+def _emit_audio_record_status() -> None:
+    rec = _audio_rec["record"]
+    socketio.emit("audio_record_status", {
+        "recording": _audio_rec["recorder"] is not None,
+        "name": rec.name if rec else None,
+    })
+
+
+def _on_radio_audio(pcm: bytes) -> None:
+    """Radio audio sink: stream to the browser and tee into any active WAV."""
+    socketio.emit("radio_audio", pcm)
+    rec = _audio_rec["recorder"]   # lock-free read; write() is safe after close
+    if rec is not None:
+        rec.write(pcm)
+
+
+def _finalize_audio_record_locked() -> None:
+    """Finalize any active recording and refresh the UI. Caller holds _state_lock."""
+    rec = _audio_rec["recorder"]
+    record = _audio_rec["record"]
+    if rec is None:
+        return
+    _audio_rec["recorder"] = None
+    _audio_rec["record"] = None
+    try:
+        finalize_recording(rec, record, int(time.time()))
+    except Exception:
+        log.exception("finalize audio record failed")
+    _emit_audio_record_status()
+    _emit_captures_list()
+
+
 def _emit_toast(level: str, message: str) -> None:
     socketio.emit("toast", {"level": level, "message": message})
 
@@ -242,13 +279,15 @@ def _enriched_captures() -> list[dict]:
     anns = get_store().list_capture_annotations()  # one query, dict lookup per item
     for item in items:
         name = item.get("name", "")
+        item["kind"] = item.get("kind", "iq")   # audio recordings set kind="audio"
         ann = anns.get(name)
         item["user_label"] = ann["user_label"] if ann else ""
         item["notes"] = ann["notes"] if ann else ""
         item["tags"] = ann["tags"] if ann else []
-        # Mark missing if the .iq file no longer exists on disk
-        iq_path = CAPTURES_DIR / name if name else None
-        item["missing"] = not (iq_path and iq_path.exists())
+        # Mark missing if the data file (.iq or .wav) no longer exists on disk
+        data_path = CAPTURES_DIR / name if name else None
+        item["missing"] = not (data_path and data_path.exists())
+        # SigMF applies to IQ captures only, not audio.
         meta = CAPTURES_DIR / (name[:-3] + ".sigmf-meta") if name.endswith(".iq") else None
         item["sigmf"] = bool(meta and meta.exists())
     return items
@@ -274,6 +313,8 @@ def _stop_all_locked() -> None:
     """Snapshot all active jobs, clear them from _state, broadcast 'idle',
     then synchronously tear down subprocesses. Caller MUST hold _state_lock.
     """
+    _finalize_audio_record_locked()  # save any in-progress recording first
+
     jobs = []
     for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio", "replay"):
         if _state[slot]:
@@ -321,6 +362,8 @@ def _make_exit_handler(slot: str, gen: int, label: str):
                 return  # superseded
             _state[slot] = None
             _state["mode"] = "idle"
+            if slot == "radio":
+                _finalize_audio_record_locked()  # radio died mid-recording
         telemetry.bump("subprocess_deaths")
         # If the device is gone, the disconnect toast covers this.
         if _device["info"] is not None:
@@ -452,7 +495,7 @@ def _start_radio(cfg: RadioConfig) -> bool:
         _state["radio_config"] = cfg
         recv = RadioReceiver(
             cfg,
-            on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
+            on_audio=_on_radio_audio,
             on_exit=_make_exit_handler("radio", gen, "Radio"),
             on_signal=lambda db: socketio.emit("radio_signal", {"dbfs": db}),
         )
@@ -670,6 +713,10 @@ def on_connect():
     emit("status", snapshot)
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
     emit("gps_status", _gps.position())
+    emit("audio_record_status", {
+        "recording": _audio_rec["recorder"] is not None,
+        "name": _audio_rec["record"].name if _audio_rec["record"] else None,
+    })
     emit("captures", {"items": _enriched_captures()})
 
 
@@ -1001,6 +1048,53 @@ def on_redact_capture(data):
     if redact_location(name):
         _emit_toast("info", f"Location removed from {name}")
     _emit_captures_list()
+
+
+@socketio.on("start_audio_record")
+def on_start_audio_record(data):
+    label = (data or {}).get("label", "")
+    label = label[:80] if isinstance(label, str) else ""
+    with _state_lock:
+        running = _state["mode"] == "radio" and _state["radio"] is not None
+        already = _audio_rec["recorder"] is not None
+        cfg = _state["radio_config"]
+    if not running:
+        _emit_toast("error", "Start the radio first, then record.")
+        return
+    if already:
+        _emit_audio_record_status()
+        return
+    # Geotag like an IQ capture (opt-in GPS, coarsened); None if no fix.
+    geo = _gps.geolocation()
+    if geo is not None:
+        try:
+            geo = coarsen_geolocation(geo, str(get_store().get_setting("gps_precision", "full")))
+        except Exception:
+            log.exception("coarsen geolocation failed")
+    try:
+        rec, record = start_recording(
+            CAPTURES_DIR, int(time.time()), int(round(cfg.freq_mhz * 1_000_000)),
+            cfg.demod, AUDIO_RATE, label, geo,
+        )
+    except Exception:
+        log.exception("start_audio_record failed")
+        _emit_toast("error", "Could not start recording.")
+        return
+    with _state_lock:
+        _audio_rec["recorder"] = rec
+        _audio_rec["record"] = record
+    _emit_audio_record_status()
+    _emit_toast("info", f"Recording audio to {record.name}")
+
+
+@socketio.on("stop_audio_record")
+def on_stop_audio_record(data=None):
+    with _state_lock:
+        record = _audio_rec["record"]
+        active = _audio_rec["recorder"] is not None
+        _finalize_audio_record_locked()
+    if active and record is not None:
+        _emit_toast("info", f"Saved {record.name} ({record.duration_s:.1f}s)")
 
 
 def main() -> None:
