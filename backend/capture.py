@@ -75,6 +75,7 @@ class CaptureRecord:
     file_size: int
     sample_format: str
     label: str
+    geolocation: dict | None = None   # capture-time GPS geotag, or None
 
 
 ProgressCallback = Callable[[int, int], None]   # (bytes_written, expected_bytes)
@@ -90,10 +91,12 @@ class IqCapture:
         config: CaptureConfig,
         on_progress: ProgressCallback | None = None,
         on_done: DoneCallback | None = None,
+        geolocation: dict | None = None,
     ):
         self.config = config
         self.on_progress = on_progress
         self.on_done = on_done
+        self._geolocation = geolocation
         self._proc: subprocess.Popen | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -147,6 +150,7 @@ class IqCapture:
             file_size=file_size,
             sample_format="cs8",
             label=self.config.label,
+            geolocation=self._geolocation,
         )
 
     def _run(self) -> None:
@@ -230,6 +234,31 @@ def list_captures() -> list[dict]:
         items.append(data)
     items.sort(key=lambda d: d.get("started_at", 0), reverse=True)
     return items
+
+
+def redact_location(name: str) -> bool:
+    """Strip the geotag from a capture's sidecar (sets geolocation to null and
+    marks it redacted). Returns True if the sidecar was updated or already
+    redacted. The .iq samples never contain location, so this fully removes it.
+    """
+    if "/" in name or ".." in name:
+        return False
+    base = name.removesuffix(".iq").removesuffix(".json")
+    sc = CAPTURES_DIR / f"{base}.json"
+    try:
+        data = json.loads(sc.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    if data.get("geolocation") is None and data.get("geolocation_redacted"):
+        return True  # already scrubbed
+    data["geolocation"] = None
+    data["geolocation_redacted"] = True
+    try:
+        sc.write_text(json.dumps(data, indent=2))
+    except OSError:
+        log.exception("failed to redact %s", sc)
+        return False
+    return True
 
 
 def delete_capture(name: str) -> bool:

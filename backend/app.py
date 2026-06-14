@@ -27,7 +27,8 @@ from flask import Flask, jsonify, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 
 from .adsb import AdsbConfig, AdsbReceiver
-from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_error, delete_capture, list_captures
+from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_error, delete_capture, list_captures, redact_location
+from .gps import GpsClient
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
 from .radio import AUDIO_RATE, RadioConfig, RadioReceiver, RadioScanner, ScanRadioConfig
@@ -50,7 +51,7 @@ PRESETS = [
     {"freq_hz": 124_000_000, "demod": "am", "label": "Air 124.0"},
 ]
 
-_SETTING_ALLOWLIST = {"last_mode", "last_radio_freq", "last_demod", "radio_volume"}
+_SETTING_ALLOWLIST = {"last_mode", "last_radio_freq", "last_demod", "radio_volume", "gps_enabled"}
 _BOOKMARK_SOURCE_ALLOWLIST = {"user", "mark", "seed"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -136,6 +137,11 @@ _state: dict = {
 }
 _device: dict = {"info": None, "checked_at": 0.0}
 
+# Optional GPS geotagging (opt-in, default off). AETHERSCOPE_GPS=0 hard-disables
+# it regardless of the stored toggle (deployments with no GPS).
+_GPS_FORCED_OFF = os.environ.get("AETHERSCOPE_GPS") == "0"
+_gps = GpsClient(on_status=lambda p: socketio.emit("gps_status", p))
+
 
 # ------------------------------------------------------------------
 # Emitters
@@ -206,6 +212,10 @@ def _emit_device_status() -> None:
         "device_status",
         {"info": _device["info"], "checked_at": _device["checked_at"]},
     )
+
+
+def _emit_gps_status() -> None:
+    socketio.emit("gps_status", _gps.position())
 
 
 def _emit_toast(level: str, message: str) -> None:
@@ -390,7 +400,10 @@ def _start_capture(cfg: CaptureConfig) -> bool:
             if emit_status_after:
                 _emit_status()
 
-        cap = IqCapture(cfg, on_progress=_emit_capture_progress, on_done=on_done)
+        # Geotag the capture if GPS is enabled and holding a fresh fix; None
+        # otherwise (geotagging never blocks or fails a capture).
+        cap = IqCapture(cfg, on_progress=_emit_capture_progress, on_done=on_done,
+                        geolocation=_gps.geolocation())
         record = cap.start()
         _state["capture"] = cap
         _state["mode"] = "capture"
@@ -602,6 +615,10 @@ def _shutdown(*_args) -> None:
         _stop_all_external()
     except Exception:
         log.exception("error during shutdown cleanup")
+    try:
+        _gps.stop()
+    except Exception:
+        log.exception("error stopping gps client")
 
 
 # ------------------------------------------------------------------
@@ -642,6 +659,7 @@ def on_connect():
     snapshot["settings"] = get_store().all_settings()
     emit("status", snapshot)
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
+    emit("gps_status", _gps.position())
     emit("captures", {"items": _enriched_captures()})
 
 
@@ -955,6 +973,24 @@ def on_set_setting(data):
         get_store().set_setting(key, value)
     except Exception as e:
         _emit_toast("error", str(e))
+        return
+    if key == "gps_enabled":
+        want = bool(value) and not _GPS_FORCED_OFF
+        _gps.set_enabled(want)
+        if bool(value) and _GPS_FORCED_OFF:
+            _emit_toast("warn", "GPS is disabled on this host (AETHERSCOPE_GPS=0)")
+        _emit_gps_status()
+
+
+@socketio.on("redact_capture")
+def on_redact_capture(data):
+    name = (data or {}).get("name")
+    if not isinstance(name, str) or not name:
+        _emit_toast("error", "redact_capture requires a name")
+        return
+    if redact_location(name):
+        _emit_toast("info", f"Location removed from {name}")
+    _emit_captures_list()
 
 
 def main() -> None:
@@ -977,6 +1013,14 @@ def main() -> None:
         except (OSError, ValueError):
             pass  # not running on main thread; atexit still covers most cases
     threading.Thread(target=_device_poller, daemon=True).start()
+    # GPS geotagging: honor the stored opt-in toggle (unless hard-disabled by
+    # env). The client thread idles cheaply while disabled.
+    try:
+        if not _GPS_FORCED_OFF and bool(get_store().get_setting("gps_enabled", False)):
+            _gps.set_enabled(True)
+    except Exception:
+        log.exception("Failed to read gps_enabled; leaving GPS off")
+    _gps.start()
     socketio.run(app, host=host, port=8765, debug=False, allow_unsafe_werkzeug=True)
 
 
