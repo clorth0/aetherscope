@@ -750,7 +750,10 @@ def on_delete_capture(data):
 
 
 def main() -> None:
-    log.info("Aetherscope listening on http://127.0.0.1:8765")
+    # Bind localhost by default; containers set AETHERSCOPE_HOST=0.0.0.0 and
+    # rely on `-p 127.0.0.1:8765:8765` (and a reverse proxy) for exposure.
+    host = os.environ.get("AETHERSCOPE_HOST", "127.0.0.1")
+    log.info("Aetherscope listening on http://%s:8765", host)
     # Register cleanup for graceful shutdown so we don't orphan subprocesses
     # holding the HackRF when launchd sends SIGTERM.
     atexit.register(_shutdown)
@@ -760,7 +763,7 @@ def main() -> None:
         except (OSError, ValueError):
             pass  # not running on main thread; atexit still covers most cases
     threading.Thread(target=_device_poller, daemon=True).start()
-    socketio.run(app, host="127.0.0.1", port=8765, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host=host, port=8765, debug=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == "__main__":

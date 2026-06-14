@@ -1,0 +1,12 @@
+# Aetherscope on Linux. See the Dockerfile header for the USB-access caveats.
+#   docker compose up --build
+services:
+  aetherscope:
+    build: .
+    devices:
+      - /dev/bus/usb            # pass the HackRF through (Linux only)
+    ports:
+      - "127.0.0.1:8765:8765"   # host-local only; reach via Tailscale/SSH/Caddy
+    volumes:
+      - ./captures:/captures    # persist IQ captures
+    restart: unless-stopped

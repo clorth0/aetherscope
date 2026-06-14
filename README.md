@@ -90,9 +90,16 @@ localhost and front it with a reverse proxy that adds TLS and authentication.
 The app stays single-process on localhost; Caddy handles TLS and auth in front.
 Reaching it over Tailscale or an `ssh -L` tunnel needs no proxy at all.
 
-## Why not Docker?
+## Docker (Linux)
 
-macOS Docker Desktop cannot pass USB devices through to containers, and the HackRF needs direct USB access. On Linux, USB passthrough works and Docker is straightforward — a Dockerfile is on the roadmap.
+macOS Docker Desktop cannot pass USB through to containers, so on a Mac use the native install above. On **Linux**, USB passthrough works, so a `Dockerfile` and `compose.yml` are included:
+
+```sh
+docker compose up --build
+# or: docker build -t aetherscope . && docker run --rm --device=/dev/bus/usb -p 127.0.0.1:8765:8765 aetherscope
+```
+
+The container binds `0.0.0.0` internally (via `AETHERSCOPE_HOST`) but only publishes to `127.0.0.1:8765`; reach it over Tailscale/SSH or front it with the Caddy recipe. It runs as a non-root user, so USB access may need a host udev rule (`--group-add plugdev`) or `--privileged`. Captures persist in `./captures`. Not yet verified on a real Linux + HackRF host; treat as a starting point.
 
 ## Architecture
 
