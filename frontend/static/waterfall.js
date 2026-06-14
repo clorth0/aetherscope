@@ -1298,7 +1298,7 @@ function renderCaptures() {
       : escapeHtml(c.sample_format || "");
     const playOrReplay = isAudio
       ? `<button data-play="${escapeHtml(c.name)}">Play</button>`
-      : `<button data-replay="${escapeHtml(c.name)}">Replay</button> <button data-listen="${escapeHtml(c.name)}">Listen</button>`;
+      : `<button data-replay="${escapeHtml(c.name)}">Replay</button> <button data-listen="${escapeHtml(c.name)}">Listen</button> <button data-decode-file="${escapeHtml(c.name)}">Decode</button>`;
     return `
     <div class="cap-row">
       <div class="cap-main">
@@ -1357,6 +1357,12 @@ function renderCaptures() {
   });
   capturesListEl.querySelectorAll("[data-listen]").forEach(btn => {
     btn.addEventListener("click", () => startIqPlay(btn.dataset.listen, "fm", 0));
+  });
+  capturesListEl.querySelectorAll("[data-decode-file]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      socket.emit("decode_capture", { name: btn.dataset.decodeFile });
+      setMode("decode");   // events stream into the Decode panel
+    });
   });
   capturesListEl.querySelectorAll("[data-redact]").forEach(btn => {
     btn.addEventListener("click", () => {

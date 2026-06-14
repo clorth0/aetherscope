@@ -36,6 +36,7 @@ from .radio import AUDIO_RATE, RadioConfig, RadioReceiver, RadioScanner, ScanRad
 from .tuning import find_peak_offset
 from .replay import IqReplay
 from .iq_playback import IqAudioPlayer
+from .decode_file import IqFileDecoder
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
 from .store import get_store
@@ -616,6 +617,45 @@ def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
     return True
 
 
+def _start_decode_file(name: str) -> bool:
+    if "/" in name or ".." in name or not name.endswith(".iq"):
+        _emit_toast("error", "Invalid capture")
+        return False
+    match = next((c for c in list_captures() if c.get("name") == name), None)
+    if not match or not match.get("path") or not os.path.exists(match["path"]):
+        _emit_toast("error", "Capture not found")
+        return False
+    sr = int(match.get("sample_rate") or 2_000_000)
+    center = int(match.get("freq_hz") or 0)
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+
+        def on_done(reason: str) -> None:
+            with _state_lock:
+                if gen == _current_job_gen and _state["decode_file"] is not None:
+                    _state["decode_file"] = None
+                    if _state["mode"] == "decode_file":
+                        _state["mode"] = "idle"
+            socketio.emit("decode_file_done", {"reason": reason, "name": name})
+            if reason == "completed":
+                _emit_toast("info", f"Decode finished: {name}")
+            _emit_status()
+
+        dec = IqFileDecoder(
+            match["path"], sr, center,
+            on_event=lambda ev: socketio.emit("decoded", ev),
+            on_done=on_done,
+        )
+        _state["decode_file"] = dec
+        _state["mode"] = "decode_file"
+        dec.start()
+    socketio.emit("decode_file_started", {"name": name, "freq_hz": center, "sample_rate": sr})
+    _emit_toast("info", f"Decoding {name} (this can take a moment)")
+    _emit_status()
+    return True
+
+
 def _start_scan(cfg: ScanConfig) -> bool:
     if _device["info"] is None:
         _emit_toast("error", "Cannot start: HackRF not detected.")
@@ -881,6 +921,15 @@ def on_play_capture(data):
             get_store().touch_capture(int(time.time()), name)
         except Exception:
             log.exception("touch_capture failed")
+
+
+@socketio.on("decode_capture")
+def on_decode_capture(data):
+    name = (data or {}).get("name")
+    if not isinstance(name, str) or not name:
+        _emit_toast("error", "decode_capture requires a name")
+        return
+    _start_decode_file(name)
 
 
 @socketio.on("start_scan")
