@@ -1,7 +1,10 @@
 """Tests for the gpsd client parsing/state (backend.gps). Hardware-free."""
 
 import os
+import socket
 import sys
+import threading
+import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -99,6 +102,40 @@ def test_coarsen_1km_rounds_to_2_decimals():
 
 def test_coarsen_none_passthrough():
     assert coarsen_geolocation(None, "1km") is None
+
+
+def test_reader_thread_survives_disable_during_active_read():
+    # Regression: disabling GPS closed the socket from another thread while the
+    # reader was mid-recv, which used to raise AttributeError on a None socket
+    # and KILL the reader thread (so re-enabling never reconnected). A fake gpsd
+    # server reproduces an active connection being torn down by set_enabled.
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def serve():
+        try:
+            conn, _ = srv.accept()
+            conn.recv(256)  # WATCH
+            while True:
+                conn.sendall(b'{"class":"TPV","mode":3,"lat":1.0,"lon":2.0}\n')
+                time.sleep(0.05)
+        except OSError:
+            pass
+
+    threading.Thread(target=serve, daemon=True).start()
+    c = GpsClient(host="127.0.0.1", port=port, enabled=True)
+    c.start()
+    time.sleep(0.5)                       # connect + read a fix
+    assert c.position()["lat"] == 1.0
+    c.set_enabled(False)                  # tears down the socket mid-read
+    time.sleep(0.2)
+    c.set_enabled(True)                   # must be able to come back
+    time.sleep(0.3)
+    assert c._thread.is_alive()           # the reader must NOT have died
+    c.stop()
+    srv.close()
 
 
 if __name__ == "__main__":

@@ -264,16 +264,21 @@ class GpsClient:
                 self._stop.wait(0.5)
                 continue
             try:
-                self._sock = socket.create_connection((self.host, self.port), timeout=5)
+                # Use a LOCAL socket ref through the read loop. set_enabled(False)
+                # may null/close self._sock from another thread; reading a local
+                # ref turns that into a clean OSError (caught below) instead of an
+                # AttributeError on None, which would otherwise kill this thread.
+                sock = socket.create_connection((self.host, self.port), timeout=5)
+                self._sock = sock
                 self._connected = True
                 backoff = 1.0
-                self._sock.sendall(_WATCH)
-                self._sock.settimeout(5)
+                sock.sendall(_WATCH)
+                sock.settimeout(5)
                 log.info("gpsd connected at %s:%s", self.host, self.port)
                 buf = b""
                 while self._enabled and not self._stop.is_set():
                     try:
-                        data = self._sock.recv(4096)
+                        data = sock.recv(4096)
                     except socket.timeout:
                         self._emit()  # refresh staleness even when quiet
                         continue
@@ -285,8 +290,9 @@ class GpsClient:
                     objs, buf = split_json_lines(buf)
                     for o in objs:
                         self.apply(o)
-            except OSError as e:
-                log.warning("gpsd connection failed (%s); retrying", e.__class__.__name__)
+            except Exception as e:
+                # Never let the reader thread die; just reconnect.
+                log.warning("gpsd connection error (%s); retrying", e.__class__.__name__)
             finally:
                 self._close_sock()
             if self._enabled and not self._stop.is_set():
