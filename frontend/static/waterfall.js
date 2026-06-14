@@ -1807,7 +1807,7 @@ function renderBookmarks() {
     const freq  = escapeHtml(fmtBookmarkFreq(bm.freq_hz));
     const demod = escapeHtml((bm.demod || "fm").toUpperCase());
     const tags  = (bm.tags || []).map(t => `<span class="bm-tag">${escapeHtml(t)}</span>`).join(" ");
-    const id    = bm.id;
+    const id    = String(Number(bm.id));  // numeric-only; safe in data-id attributes
     return `<div class="bm-row" data-id="${id}">
       <div class="bm-main">
         <span class="bm-label">${label}</span>
@@ -1876,6 +1876,7 @@ document.getElementById("btn-add-bookmark").addEventListener("click", () => {
 });
 
 async function tuneToBookmark(bm) {
+  setMode("radio");  // switch to the radio pane so Now Playing/Stop are visible
   const mhz = bm.freq_hz / 1e6;
   radioFreqEl.value = mhz.toFixed(1);
   setRadioDemod(bm.demod || "fm");
