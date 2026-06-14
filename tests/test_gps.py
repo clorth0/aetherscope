@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.gps import (  # noqa: E402
     GpsClient,
+    coarsen_geolocation,
     split_json_lines,
     sky_fields,
     tpv_fields,
@@ -75,6 +76,29 @@ def test_position_marks_stale_after_timeout():
     # Fresh now -> not stale; far-future now -> stale.
     assert c.position(now=c._updated_at + 1)["stale"] is False
     assert c.position(now=c._updated_at + 99)["stale"] is True
+
+
+def test_coarsen_full_is_unchanged():
+    g = {"lat": 38.723298, "lon": -77.813422, "alt_m": 179.2, "source": "gpsd"}
+    c = coarsen_geolocation(g, "full")
+    assert c["lat"] == 38.723298 and c["lon"] == -77.813422
+    assert c["precision"] == "full"
+
+
+def test_coarsen_100m_rounds_to_3_decimals():
+    c = coarsen_geolocation({"lat": 38.723298, "lon": -77.813422}, "100m")
+    assert c["lat"] == 38.723 and c["lon"] == -77.813
+    assert c["precision"] == "~100m"
+
+
+def test_coarsen_1km_rounds_to_2_decimals():
+    c = coarsen_geolocation({"lat": 38.723298, "lon": -77.813422}, "1km")
+    assert c["lat"] == 38.72 and c["lon"] == -77.81
+    assert c["precision"] == "~1km"
+
+
+def test_coarsen_none_passthrough():
+    assert coarsen_geolocation(None, "1km") is None
 
 
 if __name__ == "__main__":

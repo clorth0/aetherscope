@@ -68,6 +68,32 @@ def sky_fields(obj: dict) -> dict:
     return out
 
 
+# Stored-geotag precision: a privacy control over what lands in capture files.
+# The live (local) display always shows full precision.
+_PRECISION_DECIMALS = {"full": None, "100m": 3, "1km": 2}
+
+
+def coarsen_geolocation(geo: dict | None, precision: str) -> dict | None:
+    """Round a geolocation's lat/lon for privacy before it is stored.
+
+    "full" leaves coordinates exact; "100m" rounds to ~0.001 deg; "1km" to
+    ~0.01 deg. Tags the result with the precision used. None passes through.
+    """
+    if geo is None:
+        return None
+    out = dict(geo)
+    dec = _PRECISION_DECIMALS.get(precision)
+    if dec is None:
+        out["precision"] = "full"
+        return out
+    if out.get("lat") is not None:
+        out["lat"] = round(out["lat"], dec)
+    if out.get("lon") is not None:
+        out["lon"] = round(out["lon"], dec)
+    out["precision"] = "~100m" if dec == 3 else "~1km"
+    return out
+
+
 def split_json_lines(buf: bytes) -> tuple[list, bytes]:
     """Split a byte buffer into parsed JSON objects + the unconsumed remainder.
 

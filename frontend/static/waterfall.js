@@ -574,12 +574,20 @@ function renderGps(s) {
     gpsText.textContent = "GPS no fix";
     gpsPill.title = "Geotagging ON but no GPS fix yet. Click to disable.";
   }
+  updateGpsMarker();
 }
 
 socket.on("gps_status", renderGps);
 gpsPill.addEventListener("click", () => {
   socket.emit("set_setting", { key: "gps_enabled", value: !gpsState.enabled });
 });
+
+const gpsPrecisionEl = document.getElementById("gps-precision");
+if (gpsPrecisionEl) {
+  gpsPrecisionEl.addEventListener("change", () => {
+    socket.emit("set_setting", { key: "gps_precision", value: gpsPrecisionEl.value });
+  });
+}
 
 function showToast(level, message) {
   const el = document.createElement("div");
@@ -624,6 +632,10 @@ socket.on("status", (s) => {
       radioVolVal.textContent = `${st.radio_volume}%`;
       updateSliderFills(["radio_vol"]);
       if (radioGain) radioGain.gain.value = radioVolume();
+    }
+    if (st.gps_precision) {
+      const gpe = document.getElementById("gps-precision");
+      if (gpe) gpe.value = st.gps_precision;
     }
   }
 
@@ -1447,6 +1459,34 @@ function initAdsbMap() {
   }).addTo(adsbMap);
 
   setTimeout(() => adsbMap.invalidateSize(), 50);
+  updateGpsMarker();   // show the receiver position if GPS already has a fix
+}
+
+// Live receiver position from GPS (distinct from aircraft markers).
+let gpsMarker = null;
+let gpsCentered = false;
+function updateGpsMarker() {
+  if (!adsbMap) return;
+  const s = gpsState;
+  const haveFix = s && s.enabled && s.lat != null && !s.stale;
+  if (!haveFix) {
+    if (gpsMarker) { adsbMap.removeLayer(gpsMarker); gpsMarker = null; }
+    return;
+  }
+  const latlng = [s.lat, s.lon];
+  if (!gpsMarker) {
+    gpsMarker = L.circleMarker(latlng, {
+      radius: 7, color: "#ffffff", weight: 2,
+      fillColor: "#22d3ee", fillOpacity: 0.9,
+    }).addTo(adsbMap);
+    gpsMarker.bindTooltip("Receiver (GPS)");
+    if (!gpsCentered) {
+      adsbMap.setView(latlng, Math.max(adsbMap.getZoom(), 11));
+      gpsCentered = true;
+    }
+  } else {
+    gpsMarker.setLatLng(latlng);
+  }
 }
 
 // Deterministic vivid color per aircraft, stable across updates (from the hex).

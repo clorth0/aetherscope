@@ -28,7 +28,7 @@ from flask_socketio import SocketIO, emit
 
 from .adsb import AdsbConfig, AdsbReceiver
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_error, delete_capture, list_captures, redact_location
-from .gps import GpsClient
+from .gps import GpsClient, coarsen_geolocation
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
 from .radio import AUDIO_RATE, RadioConfig, RadioReceiver, RadioScanner, ScanRadioConfig
@@ -51,7 +51,8 @@ PRESETS = [
     {"freq_hz": 124_000_000, "demod": "am", "label": "Air 124.0"},
 ]
 
-_SETTING_ALLOWLIST = {"last_mode", "last_radio_freq", "last_demod", "radio_volume", "gps_enabled"}
+_SETTING_ALLOWLIST = {"last_mode", "last_radio_freq", "last_demod", "radio_volume",
+                      "gps_enabled", "gps_precision"}
 _BOOKMARK_SOURCE_ALLOWLIST = {"user", "mark", "seed"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -401,9 +402,16 @@ def _start_capture(cfg: CaptureConfig) -> bool:
                 _emit_status()
 
         # Geotag the capture if GPS is enabled and holding a fresh fix; None
-        # otherwise (geotagging never blocks or fails a capture).
+        # otherwise (geotagging never blocks or fails a capture). The stored
+        # geotag is coarsened per the gps_precision privacy setting.
+        geo = _gps.geolocation()
+        if geo is not None:
+            try:
+                geo = coarsen_geolocation(geo, str(get_store().get_setting("gps_precision", "full")))
+            except Exception:
+                log.exception("coarsen geolocation failed")
         cap = IqCapture(cfg, on_progress=_emit_capture_progress, on_done=on_done,
-                        geolocation=_gps.geolocation())
+                        geolocation=geo)
         record = cap.start()
         _state["capture"] = cap
         _state["mode"] = "capture"

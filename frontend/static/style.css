@@ -1196,3 +1196,11 @@ canvas {
 
 /* Mark save-to-bookmark button */
 .mark-save { color: #e0b94d; }
+
+/* GPS geotag precision control (Diagnostics) */
+.diag-gps { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.diag-gps select {
+  background: var(--bg-2, #12151c); color: var(--fg, #cfd6e4);
+  border: 1px solid var(--border, #1e2530); border-radius: 4px; padding: 2px 6px;
+  font: 12px var(--mono, ui-monospace, Menlo, monospace);
+}
