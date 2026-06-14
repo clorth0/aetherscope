@@ -467,6 +467,7 @@ function refreshStatusUI() {
   else if (serverMode === "adsb") statusText.textContent = "Tracking";
   else if (serverMode === "scan") statusText.textContent = "Auto-Scanning";
   else if (serverMode === "scan_radio") statusText.textContent = "Scanning";
+  else if (serverMode === "replay") statusText.textContent = "Replaying";
   else statusText.textContent = "Idle";
   if (serverMode !== "sweep") sweepRateEl.textContent = "0.0 Hz";
   const scanBtn = document.getElementById("btn-scan-radio");
@@ -1159,6 +1160,7 @@ function renderCaptures() {
       </div>
       <div class="cap-actions">
         <a href="/captures/${encodeURIComponent(c.name)}" download>Download</a>
+        <button data-replay="${c.name}">Replay</button>
         <button class="danger" data-delete="${c.name}">Delete</button>
       </div>
     </div>
@@ -1169,6 +1171,12 @@ function renderCaptures() {
       if (confirm(`Delete ${btn.dataset.delete}?`)) {
         socket.emit("delete_capture", { name: btn.dataset.delete });
       }
+    });
+  });
+  capturesListEl.querySelectorAll("[data-replay]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      socket.emit("start_replay", { name: btn.dataset.replay });
+      setMode("sweep");   // watch the recorded spectrogram in the sweep view
     });
   });
 }

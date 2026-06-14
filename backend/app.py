@@ -31,6 +31,7 @@ from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_erro
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
 from .radio import AUDIO_RATE, RadioConfig, RadioReceiver, RadioScanner, ScanRadioConfig
+from .replay import IqReplay
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
 from . import telemetry
@@ -108,6 +109,7 @@ _state: dict = {
     "scanner": None,
     "radio": None,
     "scan_radio": None,
+    "replay": None,
     "sweep_config": SweepConfig(),
     "decode_config": DecodeConfig(),
     "capture_config": CaptureConfig(),
@@ -223,13 +225,13 @@ def _stop_all_locked() -> None:
     then synchronously tear down subprocesses. Caller MUST hold _state_lock.
     """
     jobs = []
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio"):
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio", "replay"):
         if _state[slot]:
             jobs.append((slot, _state[slot]))
 
     was_scanning = _state["mode"] == "scan"
 
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio"):
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio", "replay"):
         _state[slot] = None
     _state["mode"] = "idle"
 
@@ -426,6 +428,43 @@ def _start_scan_radio(cfg: ScanRadioConfig) -> bool:
         scanner.start()
     socketio.emit("scan_radio_started",
                   {"count": len(cfg.freqs_mhz), "sample_rate": AUDIO_RATE, "demod": cfg.demod})
+    _emit_status()
+    return True
+
+
+def _start_replay(name: str) -> bool:
+    if "/" in name or ".." in name:
+        _emit_toast("error", "Invalid capture name")
+        return False
+    match = next((c for c in list_captures() if c.get("name") == name), None)
+    if not match or not match.get("path") or not os.path.exists(match["path"]):
+        _emit_toast("error", "Capture not found")
+        return False
+    center = int(match.get("freq_hz") or 0)
+    sr = int(match.get("sample_rate") or 2_000_000)
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+
+        def on_done(reason: str) -> None:
+            with _state_lock:
+                if gen == _current_job_gen and _state["replay"] is not None:
+                    _state["replay"] = None
+                    if _state["mode"] == "replay":
+                        _state["mode"] = "idle"
+            socketio.emit("replay_done", {"reason": reason, "name": name})
+            _emit_status()
+
+        rp = IqReplay(
+            match["path"], center, sr,
+            on_frame=lambda f0, f1, powers: socketio.emit(
+                "sweep", {"f0": f0, "f1": f1, "powers": powers, "rate_hz": 20.0}),
+            on_done=on_done,
+        )
+        _state["replay"] = rp
+        _state["mode"] = "replay"
+        rp.start()
+    socketio.emit("replay_started", {"name": name, "freq_hz": center, "sample_rate": sr})
     _emit_status()
     return True
 
@@ -652,6 +691,13 @@ def on_start_scan_radio(data):
     except (TypeError, ValueError):
         squelch = -45.0
     _start_scan_radio(ScanRadioConfig(freqs_mhz=freqs, demod=demod, squelch_dbfs=squelch))
+
+
+@socketio.on("start_replay")
+def on_start_replay(data):
+    name = (data or {}).get("name", "")
+    if name:
+        _start_replay(name)
 
 
 @socketio.on("start_scan")
