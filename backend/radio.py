@@ -183,6 +183,7 @@ class RadioReceiver:
         self._proc: subprocess.Popen | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_iq: np.ndarray | None = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -190,6 +191,14 @@ class RadioReceiver:
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def latest_iq(self) -> np.ndarray | None:
+        """Most recent complex baseband block, or None before any arrives.
+
+        Read by the snap-to-peak handler from another thread; a reference swap
+        is atomic in CPython, so no lock is needed.
+        """
+        return self._last_iq
 
     def stop(self) -> None:
         self._stop.set()
@@ -247,6 +256,7 @@ class RadioReceiver:
                 continue
             raw = raw[:n].astype(np.float32) / 128.0
             iq = (raw[0::2] + 1j * raw[1::2]).astype(np.complex64)
+            self._last_iq = iq
             try:
                 pcm = demodulate(iq, c.demod, state)
                 self.on_audio(pcm.tobytes())

@@ -19,7 +19,7 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +31,7 @@ from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_erro
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
 from .radio import AUDIO_RATE, RadioConfig, RadioReceiver, RadioScanner, ScanRadioConfig
+from .tuning import find_peak_offset
 from .replay import IqReplay
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
@@ -723,6 +724,31 @@ def on_cancel_capture():
 @socketio.on("stop")
 def on_stop():
     _stop_all_external()
+
+
+@socketio.on("snap_radio")
+def on_snap_radio():
+    """Recenter the radio on the strongest carrier near the tuned frequency."""
+    with _state_lock:
+        recv = _state["radio"] if _state["mode"] == "radio" else None
+        cfg = _state["radio_config"]
+    if recv is None:
+        _emit_toast("error", "Snap only works while the radio is playing.")
+        return
+    iq = recv.latest_iq()
+    if iq is None:
+        _emit_toast("info", "No samples yet, try snapping again in a moment.")
+        return
+    # Narrow demods sit on tight channels; keep the search from crossing into
+    # an adjacent one. Wideband FM stations are 200 kHz apart, so 100 kHz is safe.
+    search_hz = 100_000.0 if cfg.demod == "fm" else 25_000.0
+    offset = find_peak_offset(iq, cfg.sample_rate_hz, search_hz=search_hz)
+    if abs(offset) < 500.0:
+        _emit_toast("info", f"Already on the strongest signal near {cfg.freq_mhz:.3f} MHz.")
+        return
+    new_freq = round(cfg.freq_mhz + offset / 1_000_000.0, 4)
+    _start_radio(replace(cfg, freq_mhz=new_freq))
+    _emit_toast("success", f"Snapped to {new_freq:.3f} MHz ({offset / 1000:+.1f} kHz).")
 
 
 @socketio.on("refresh_device")
