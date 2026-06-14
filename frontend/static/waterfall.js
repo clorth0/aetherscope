@@ -1670,6 +1670,18 @@ document.getElementById("btn-start-adsb").addEventListener("click", (e) => {
     adsbMap.setView([cfg.rx_lat, cfg.rx_lon], 9);
   }
 });
+document.getElementById("btn-adsb-use-gps").addEventListener("click", () => {
+  // Fill the receiver location from the live GPS fix (full precision; this is a
+  // local-only value used for map centering and range, not a shared artifact).
+  if (!gpsState || !gpsState.enabled || gpsState.lat == null || gpsState.stale) {
+    showToast("warn", "No GPS fix to use. Enable GPS and wait for a fix.");
+    return;
+  }
+  document.getElementById("adsb_lat").value = gpsState.lat;
+  document.getElementById("adsb_lon").value = gpsState.lon;
+  showToast("info", "Receiver location set from GPS.");
+});
+
 document.getElementById("btn-stop-adsb").addEventListener("click", (e) => {
   flashClick(e.currentTarget, "stop (adsb)");
   socket.emit("stop");
