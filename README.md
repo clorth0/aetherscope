@@ -1,127 +1,77 @@
 # Aetherscope
 
-Aetherscope is a self-hosted browser UI for a [HackRF One](https://greatscottgadgets.com/hackrf/) SDR. Live spectrum + waterfall, single-frequency ISM device decoding via rtl_433, IQ capture-to-disk, ADS-B aircraft tracking on a map, and a multi-phase Auto-Scan that does all of the above sequentially and produces a single report. Designed for a homelab security-RX workflow.
+![Aetherscope spectrum and waterfall](docs/img/spectrum.png)
 
-Binds to `127.0.0.1` only — intended to be reached over Tailscale or `ssh -L`.
+[![CI](https://github.com/clorth0/aetherscope/actions/workflows/ci.yml/badge.svg)](https://github.com/clorth0/aetherscope/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/clorth0/aetherscope)](https://github.com/clorth0/aetherscope/releases)
+[![License: MIT](https://img.shields.io/github/license/clorth0/aetherscope)](LICENSE)
+
+A self-hosted browser UI for a [HackRF One](https://greatscottgadgets.com/hackrf/)
+SDR: a live spectrum analyzer, AM/FM/NBFM you can actually listen to, ISM device
+decoding, ADS-B aircraft tracking, IQ capture and offline replay, and a one-click
+survey scan. Built for a homelab security-RX workflow.
+
+Binds to `127.0.0.1` only, meant to be reached over Tailscale or `ssh -L`.
+
+## Highlights
+
+- **Spectrum analyzer:** live FFT + scrolling waterfall (1 Hz to 6 GHz), max-hold
+  and average traces, a live peak table with SNR, click-drag zoom, hover and
+  click-to-mark, and dB-offset calibration.
+- **Radio:** listen in the browser. FM broadcast, narrowband FM (land mobile,
+  GMRS, ham), and AM (airband). A scanner cycles your marked frequencies and
+  stops on activity.
+- **Capture and replay:** record IQ to disk, then replay a recording as an
+  offline spectrogram.
+- **Decode and track:** rtl_433 ISM devices and ADS-B aircraft on a map.
+- **Auto-Scan:** sequential survey (sweep, ISM, ADS-B) with a band-classified
+  report.
+- **Built to trust:** a diagnostics/telemetry panel, a strict CSP with vendored
+  dependencies (works offline), input validation, and CI.
 
 ## Modes
 
-| Mode | What it does | Underlying tool |
+| Mode | What it does | Tool |
 |---|---|---|
-| **Sweep** | Live FFT + scrolling waterfall, 1 Hz to 6 GHz | `hackrf_sweep` |
-| **Decode** | Live ISM-band device decoding (315/433/868/915 MHz) | `rtl_433` w/ SoapySDR |
+| **Sweep** | FFT + waterfall, max-hold, peak table, zoom, marks | `hackrf_sweep` |
+| **Radio** | AM / FM / NBFM audio + scanner | `hackrf_transfer` + numpy/scipy |
 | **Capture** | Record IQ to disk + JSON sidecar | `hackrf_transfer` |
-| **ADS-B** | Aircraft tracking with Leaflet dark-tile map | `readsb-hackrf` |
-| **Radio** | Listen to audio in the browser, AM/FM toggle (FM broadcast 88-108 MHz, AM airband 118-137 MHz) | `hackrf_transfer` + numpy/scipy demod |
-| **Auto-Scan** | Sequential pipeline: sweep → ISM 433 → ISM 915 → ADS-B → report | all of the above |
+| **Replay** | Play a saved capture back as a spectrogram | offline |
+| **Decode** | ISM device decoding (315 / 433 / 868 / 915 MHz) | `rtl_433` + SoapySDR |
+| **ADS-B** | Aircraft on a Leaflet map | `readsb-hackrf` |
+| **Auto-Scan** | Sweep, ISM, ADS-B, report | all of the above |
 
-## Requirements
-
-- macOS (Apple Silicon tested) or Linux
-- Homebrew on macOS
-- A HackRF One plugged in directly to the host (USB passthrough doesn't work on macOS Docker)
-
-## Install on macOS (one command)
+## Quickstart (macOS)
 
 ```sh
 git clone https://github.com/clorth0/aetherscope.git
 cd aetherscope
 ./deploy/install.sh
+uv run aetherscope        # then open http://127.0.0.1:8765/
 ```
 
-The installer:
+Requirements, the launchd service, and updating are in [docs/install.md](docs/install.md).
 
-1. Installs the Homebrew SDR stack (`hackrf`, `librtlsdr`, `soapysdr`, `soapyhackrf`, `soapyrtlsdr`)
-2. Rebuilds `rtl_433` from source if the bottle was missing SoapySDR (needed to use the HackRF)
-3. Builds `readsb-hackrf` from `wiedehopf/readsb` with `HACKRF=yes`, installs to `~/.local/bin/`
-4. Installs `uv` if missing
-5. Runs `uv sync` to install Python deps
+## Reach it remotely
 
-## Running
+Over Tailscale or an `ssh -L` tunnel it needs no extra setup. To expose it, put
+TLS + auth in front (Caddy recipe) or run the Linux container. See
+[docs/deployment.md](docs/deployment.md).
 
-**Manual** (foreground, kill with Ctrl-C):
+## Docs
 
-```sh
-uv run aetherscope
-```
+- [Install and run](docs/install.md)
+- [Configuration](docs/configuration.md)
+- [Deployment (Caddy, Docker)](docs/deployment.md)
+- [Architecture](docs/architecture.md)
+- [Security policy](SECURITY.md)
 
-**As a managed launchd service** (auto-start on login, restart on crash):
+## Security
 
-```sh
-./deploy/install-launchd.sh
-```
+Localhost-only by design, with no built-in authentication. Do not put it on a
+public interface without your own access controls. Report issues privately via
+the repository's Security tab. See [SECURITY.md](SECURITY.md).
 
-Then open <http://127.0.0.1:8765/>.
+## License
 
-Useful launchd commands (also printed by the installer):
-
-```sh
-launchctl print     gui/$(id -u)/local.aetherscope   # status, pid, last exit
-launchctl kickstart -k gui/$(id -u)/local.aetherscope   # restart
-launchctl kill SIGTERM gui/$(id -u)/local.aetherscope   # stop (auto-respawns)
-launchctl bootout      gui/$(id -u)/local.aetherscope   # disable and unload
-tail -f ~/Library/Logs/aetherscope/stderr.log
-```
-
-Override the service label with `AETHERSCOPE_LABEL=…` if you have a naming convention.
-
-## Configuration
-
-Environment variables, all optional:
-
-- `AETHERSCOPE_CAPTURES_DIR` — where IQ recordings land (defaults to `<repo>/captures/`)
-- `AETHERSCOPE_ALLOWED_ORIGINS` — comma-separated extra origins allowed to connect (set this to your proxy domain when running behind a reverse proxy; defaults to same-origin only)
-- `AETHERSCOPE_SECRET_KEY` — Flask session key (defaults to a random per-process key)
-- `AETHERSCOPE_LABEL` — launchd service label override
-
-## Exposing beyond localhost (Caddy + auth)
-
-Aetherscope binds to `127.0.0.1` and has no built-in auth, so it should not
-be put on a public interface directly. To reach it remotely, keep it on
-localhost and front it with a reverse proxy that adds TLS and authentication.
-
-`deploy/Caddyfile.example` is a ready-to-edit recipe using [Caddy](https://caddyserver.com):
-
-1. Generate a password hash: `caddy hash-password --plaintext 'your-password'`
-2. Put it in the `basic_auth` block, set your domain, and `reverse_proxy 127.0.0.1:8765`.
-3. Set `AETHERSCOPE_ALLOWED_ORIGINS=https://your-domain` in the service env so
-   the proxied Socket.IO connection is accepted.
-
-The app stays single-process on localhost; Caddy handles TLS and auth in front.
-Reaching it over Tailscale or an `ssh -L` tunnel needs no proxy at all.
-
-## Docker (Linux)
-
-macOS Docker Desktop cannot pass USB through to containers, so on a Mac use the native install above. On **Linux**, USB passthrough works, so a `Dockerfile` and `compose.yml` are included:
-
-```sh
-docker compose up --build
-# or: docker build -t aetherscope . && docker run --rm --device=/dev/bus/usb -p 127.0.0.1:8765:8765 aetherscope
-```
-
-The container binds `0.0.0.0` internally (via `AETHERSCOPE_HOST`) but only publishes to `127.0.0.1:8765`; reach it over Tailscale/SSH or front it with the Caddy recipe. It runs as a non-root user, so USB access may need a host udev rule (`--group-add plugdev`) or `--privileged`. Captures persist in `./captures`. Not yet verified on a real Linux + HackRF host; treat as a starting point.
-
-## Architecture
-
-```
-┌──────────────┐   stdout/JSON/files   ┌──────────────┐   Socket.IO    ┌──────────────┐
-│ hackrf_sweep │                       │ Flask + JS   │                │ Browser      │
-│ hackrf_xfer  ├──────────────────────▶│ orchestration ├──────────────▶│ canvas + map │
-│ rtl_433      │                       │ (one slot,   │                │ + event log  │
-│ readsb       │                       │  mutex)      │                │              │
-└──────────────┘                       └──────────────┘                └──────────────┘
-```
-
-All HackRF-claiming jobs (sweep, decode, capture, ADS-B, auto-scan) are mutually exclusive — the backend keeps a single "current job" slot. Background poller probes `hackrf_info` every 2.5 s so the UI shows live device status.
-
-## Roadmap
-
-- `rtl_433` decoder integration ✓
-- IQ capture-to-disk ✓
-- ADS-B (readsb-hackrf) with live aircraft map ✓
-- Auto-scan: sweep + ISM 433 + ISM 915 + ADS-B sequential report ✓
-- Per-band gain presets ✓
-- launchd service ✓
-- Tailscale-serve docs
-- Basic auth (for when you want to expose beyond Tailscale)
-- Linux Dockerfile + compose
+MIT. See [LICENSE](LICENSE).
