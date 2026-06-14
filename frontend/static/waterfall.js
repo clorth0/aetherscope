@@ -1716,7 +1716,7 @@ function setRadioNow(state, freq, demod) {
   const f = document.getElementById("radio-now-freq");
   const d = document.getElementById("radio-now-demod");
   if (s) { s.textContent = state; s.classList.toggle("live", state === "Playing" || state === "Holding"); }
-  if (f) f.textContent = (freq != null) ? `${parseFloat(freq).toFixed(1)} MHz` : "—";
+  if (f) f.textContent = (freq != null) ? `${parseFloat(freq).toFixed(3)} MHz` : "—";
   if (d) d.textContent = demod ? demod.toUpperCase() : "";
 }
 
@@ -1815,6 +1815,13 @@ document.getElementById("btn-stop-radio").addEventListener("click", (e) => {
   flashClick(e.currentTarget, "stop (radio)");
   socket.emit("stop");
   stopRadioPlayback();
+});
+
+document.getElementById("btn-snap-radio").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "snap_radio");
+  // Backend recenters on the nearest strong carrier (or toasts if not playing);
+  // the resulting radio_started refreshes the now-playing frequency.
+  socket.emit("snap_radio");
 });
 
 // ---- Scanner: cycle the marked frequencies, stop on activity ----
