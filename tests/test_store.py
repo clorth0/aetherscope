@@ -3,11 +3,13 @@
 import os
 import sys
 import tempfile
+import threading
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.store import Store, normalize_tags, validate_bookmark  # noqa: E402
+import backend.store as store_mod  # noqa: E402
+from backend.store import Store, get_store, normalize_tags, validate_bookmark  # noqa: E402
 
 
 def _make_store():
@@ -297,6 +299,51 @@ def test_parameterized_queries_are_safe():
     rows = s.list_bookmarks()
     assert len(rows) == 1
     assert rows[0]["label"] == evil_label
+
+
+# ---------------------------------------------------------------------------
+# 12. get_store singleton + AETHERSCOPE_DATA_DIR override
+# ---------------------------------------------------------------------------
+
+def test_get_store_singleton():
+    d = tempfile.mkdtemp()
+    old_env = os.environ.get("AETHERSCOPE_DATA_DIR")
+    old_singleton = store_mod._store
+    store_mod._store = None                       # isolate from any cached instance
+    os.environ["AETHERSCOPE_DATA_DIR"] = d
+    try:
+        s1 = get_store()
+        s2 = get_store()
+        assert s1 is s2                           # cached singleton
+        assert os.path.exists(os.path.join(d, "aetherscope.db"))
+        s1.set_setting("probe", 1)
+        assert get_store().get_setting("probe") == 1
+    finally:
+        store_mod._store = old_singleton
+        if old_env is None:
+            os.environ.pop("AETHERSCOPE_DATA_DIR", None)
+        else:
+            os.environ["AETHERSCOPE_DATA_DIR"] = old_env
+
+
+# ---------------------------------------------------------------------------
+# 13. Thread-safety: concurrent inserts do not lose rows
+# ---------------------------------------------------------------------------
+
+def test_concurrent_inserts():
+    s = _make_store()
+    now = 1_700_000_000
+
+    def worker(n):
+        for i in range(10):
+            s.add_bookmark(now, 100_000_000 + n * 100 + i, "fm", f"t{n}-{i}")
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(s.list_bookmarks()) == 100  # 10 threads x 10 inserts, none lost
 
 
 # ---------------------------------------------------------------------------

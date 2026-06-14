@@ -62,7 +62,7 @@ def validate_bookmark(freq_hz, demod, label, notes) -> None:
         )
     if demod not in _ALLOWED_DEMODS:
         raise ValueError(
-            f"demod must be one of {sorted(d for d in _ALLOWED_DEMODS if d)}  or None; got {demod!r}"
+            f"demod must be one of {sorted(d for d in _ALLOWED_DEMODS if d)} or None; got {demod!r}"
         )
     if not isinstance(label, str) or not (1 <= len(label.strip()) <= 80):
         raise ValueError("label must be 1–80 non-whitespace chars")
@@ -153,12 +153,23 @@ class Store:
             except OSError:
                 pass
 
-            # Run migrations
+            # Run migrations atomically: DDL + the version bump in one
+            # transaction, so a crash mid-migration cannot leave the schema
+            # half-created with a stale user_version. sqlite3's implicit
+            # transaction handling does not wrap executescript, so drive the
+            # statements explicitly. (foreign_keys/journal_mode pragmas above
+            # do not open a transaction, so BEGIN is valid here.)
             version = self._conn.execute("PRAGMA user_version").fetchone()[0]
             if version < 1:
-                self._conn.executescript(_V1_SCHEMA)
-                self._conn.execute("PRAGMA user_version = 1")
-                self._conn.commit()
+                try:
+                    self._conn.execute("BEGIN")
+                    for stmt in filter(str.strip, _V1_SCHEMA.split(";")):
+                        self._conn.execute(stmt)
+                    self._conn.execute("PRAGMA user_version = 1")
+                    self._conn.commit()
+                except Exception:
+                    self._conn.rollback()
+                    raise
 
     # ------------------------------------------------------------------
     # Bookmarks
@@ -175,6 +186,8 @@ class Store:
         source: str = "user",
     ) -> dict:
         """Validate, insert, and return the new bookmark row as a dict."""
+        if isinstance(label, str):
+            label = label.strip()  # strip once; stored value matches what we validate
         validate_bookmark(freq_hz, demod, label, notes)
         tags_str = normalize_tags(tags)
         with self._lock:
@@ -182,7 +195,7 @@ class Store:
                 """INSERT INTO bookmarks
                    (freq_hz, demod, label, notes, tags, source, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (freq_hz, demod, label.strip(), notes, tags_str, source, now, now),
+                (freq_hz, demod, label, notes, tags_str, source, now, now),
             )
             self._conn.commit()
             row = self._conn.execute(
@@ -216,6 +229,8 @@ class Store:
             merged_demod = updates.get("demod",   current["demod"])
             merged_label = updates.get("label",   current["label"])
             merged_notes = updates.get("notes",   current["notes"])
+            if isinstance(merged_label, str):
+                merged_label = merged_label.strip()  # strip once; matches what we store
 
             # Re-validate the resulting bookmark
             validate_bookmark(merged_freq, merged_demod, merged_label, merged_notes)
@@ -229,7 +244,7 @@ class Store:
                 """UPDATE bookmarks
                    SET freq_hz=?, demod=?, label=?, notes=?, tags=?, updated_at=?
                    WHERE id=?""",
-                (merged_freq, merged_demod, merged_label.strip(),
+                (merged_freq, merged_demod, merged_label,
                  merged_notes, tags_str, now, id),
             )
             self._conn.commit()
