@@ -22,8 +22,10 @@
   (sweeps computed vs emitted, subprocess deaths) feed the Diagnostics panel.
 - **Data layer.** `store.py` is a small stdlib-`sqlite3` module (single file at
   `AETHERSCOPE_DATA_DIR`, default `~/.local/share/aetherscope/`) holding
-  bookmarks, persisted UI settings, and capture annotations. It is thread-safe
-  (one connection, WAL, a lock) and parameterized throughout.
+  bookmarks, persisted UI settings, capture annotations, and a persistent
+  contact inventory (ADS-B aircraft + rtl_433 ISM devices, with first/last seen,
+  count, info, location). It is thread-safe (one connection, WAL, a lock),
+  parameterized throughout, and `user_version`-migrated.
 - **GPS geotagging (optional, opt-in).** `gps.py` reads a local gpsd over a raw
   socket (`AETHERSCOPE_GPSD_HOST`/`PORT`, default 127.0.0.1:2947), only while the
   `gps_enabled` toggle is on (`AETHERSCOPE_GPS=0` hard-disables it). When a fresh
