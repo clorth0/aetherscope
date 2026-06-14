@@ -47,6 +47,7 @@ let dragStartX    = -1;     // spectrum drag-zoom selection (px), -1 = none
 let dragCurX      = -1;
 let prevRange     = null;   // range before the last zoom, for double-click reset
 let suppressClick = false;  // swallow the click that ends a drag
+let calOffset    = loadCalOffset();  // user dB offset so the axis reads approx dBm
 let cursorX      = -1;
 let sweepTimestamps = [];
 let events       = [];
@@ -229,10 +230,10 @@ function drawFFT(powers) {
     fftCtx.moveTo(plot.x, y + 0.5);
     fftCtx.lineTo(plot.x + plot.w, y + 0.5);
     fftCtx.stroke();
-    fftCtx.fillText(`${dB}`, plot.x - 6, y);
+    fftCtx.fillText(`${dB + calOffset}`, plot.x - 6, y);
   }
   fftCtx.textAlign = "left";
-  fftCtx.fillText("dB", plot.x + plot.w + 4, plot.y + 4);
+  fftCtx.fillText(calOffset ? "dBm" : "dB", plot.x + plot.w + 4, plot.y + 4);
   if (lastSweep) {
     fftCtx.textAlign = "center";
     fftCtx.textBaseline = "top";
@@ -640,7 +641,7 @@ function renderPeakTable(peaks) {
     f.textContent = fmtFreq(p.hz);
     const lvl = document.createElement("span");
     lvl.className = "peak-lvl";
-    lvl.textContent = `${p.power.toFixed(0)} dBFS · +${p.snr.toFixed(0)}`;
+    lvl.textContent = `${displayPow(p.power).toFixed(0)} ${powUnit()} · +${p.snr.toFixed(0)}`;
     const mk = document.createElement("button");
     mk.className = "btn ghost small";
     mk.textContent = "Mark";
@@ -682,6 +683,27 @@ document.getElementById("btn-trace-clear").addEventListener("click", () => {
   avgPowers = null;
   if (lastSweep) drawFFT(lastSweep.powers);
 });
+
+// Power calibration: a user dB offset so the axis can read approximate dBm
+// (the HackRF is uncalibrated; this is a relative reference shift).
+function loadCalOffset() {
+  const v = parseFloat(localStorage.getItem("aetherscope.calOffset"));
+  return Number.isFinite(v) ? v : 0;
+}
+function displayPow(db) { return db + calOffset; }
+function powUnit() { return calOffset ? "dBm" : "dBFS"; }
+const calOffsetEl = document.getElementById("cal_offset");
+if (calOffsetEl) {
+  calOffsetEl.value = calOffset;
+  calOffsetEl.addEventListener("input", () => {
+    const v = parseFloat(calOffsetEl.value);
+    calOffset = Number.isFinite(v) ? v : 0;
+    try { localStorage.setItem("aetherscope.calOffset", String(calOffset)); } catch (e) { /* ignore */ }
+    if (lastSweep) drawFFT(lastSweep.powers);
+    renderPeakTable(lastPeaks);
+    renderMarks();
+  });
+}
 
 socket.on("sweep", (msg) => {
   const rangeChanged = !lastSweep
@@ -918,7 +940,7 @@ function handleHover(e) {
   const idx = Math.floor(t * lastSweep.powers.length);
   const dB = lastSweep.powers[Math.max(0, Math.min(lastSweep.powers.length - 1, idx))];
   hoverFreqEl.textContent  = fmtFreq(freqHz);
-  hoverPowerEl.textContent = `${dB.toFixed(1)} dBFS`;
+  hoverPowerEl.textContent = `${displayPow(dB).toFixed(1)} ${powUnit()}`;
   hoverTag.textContent = fmtFreq(freqHz);
   hoverTag.style.left = `${e.clientX + 12}px`;
   hoverTag.style.top  = `${e.clientY + 14}px`;
@@ -1053,7 +1075,7 @@ function renderMarks() {
 
     const freq = document.createElement("span");
     freq.className = "mark-freq";
-    freq.textContent = (m.power != null) ? `${fmtFreq(m.hz)}  ${m.power.toFixed(0)} dB` : fmtFreq(m.hz);
+    freq.textContent = (m.power != null) ? `${fmtFreq(m.hz)}  ${displayPow(m.power).toFixed(0)} ${powUnit()}` : fmtFreq(m.hz);
 
     const tune = document.createElement("button");
     tune.className = "btn ghost small";
