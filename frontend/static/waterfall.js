@@ -1,4 +1,4 @@
-// hackrf-web — frontend SDR canvas: FFT trace, scrolling waterfall,
+// Aetherscope — frontend SDR canvas: FFT trace, scrolling waterfall,
 // and rtl_433 decoded event log. Two mutually exclusive modes: sweep / decode.
 
 const socket = io();
@@ -647,7 +647,7 @@ document.querySelectorAll(".band-btn").forEach(b => {
 // the click never reached the page at all (browser extension blocking
 // it, missed the button, etc).
 function flashClick(el, message) {
-  console.log("[hackrf-web] click:", message, "at", new Date().toISOString());
+  console.log("[aetherscope] click:", message, "at", new Date().toISOString());
   const orig = {
     background: el.style.background,
     boxShadow: el.style.boxShadow,

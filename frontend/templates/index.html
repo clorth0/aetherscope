@@ -2,11 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>hackrf-web</title>
+<title>Aetherscope</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ app_version }}" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"
+        integrity="sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO"
+        crossorigin="anonymous"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 </head>
@@ -15,7 +17,7 @@
 <header class="topbar">
   <div class="brand">
     <span class="logo-mark"></span>
-    <span class="logo-text">hackrf<span class="logo-dim">-web</span></span>
+    <span class="logo-text">aether<span class="logo-dim">scope</span></span>
   </div>
   <button class="device-pill" id="device-pill" title="Click to re-probe">
     <span class="dot stopped" id="device-dot"></span>
@@ -277,7 +279,7 @@
       <section class="panel">
         <h2>Files</h2>
         <p class="hint">
-          Saved as cs8 (signed 8-bit interleaved I/Q) under <code>~/hackrf-web/captures/</code>.
+          Saved as cs8 (signed 8-bit interleaved I/Q) under <code>~/aetherscope/captures/</code>.
           Open in URH / inspectrum, or pipe through <code>rtl_433 -r cs8:file.iq</code>.
         </p>
       </section>

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
+import secrets
 import signal
 import sys
 import threading
@@ -32,7 +34,7 @@ from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("hackrf-web")
+log = logging.getLogger("aetherscope")
 
 ROOT = Path(__file__).resolve().parent.parent
 app = Flask(
@@ -40,7 +42,9 @@ app = Flask(
     template_folder=str(ROOT / "frontend" / "templates"),
     static_folder=str(ROOT / "frontend" / "static"),
 )
-app.config["SECRET_KEY"] = "dev-local-only"
+# Local-only app; session signing key comes from the environment when set,
+# otherwise a fresh random key is generated per process.
+app.secret_key = os.environ.get("AETHERSCOPE_SECRET_KEY") or secrets.token_hex(32)
 socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=[])
 
 # Server-startup timestamp used to bust browser caches whenever the
@@ -568,7 +572,7 @@ def on_delete_capture(data):
 
 
 def main() -> None:
-    log.info("hackrf-web listening on http://127.0.0.1:8765")
+    log.info("Aetherscope listening on http://127.0.0.1:8765")
     # Register cleanup for graceful shutdown so we don't orphan subprocesses
     # holding the HackRF when launchd sends SIGTERM.
     atexit.register(_shutdown)

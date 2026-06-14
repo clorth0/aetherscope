@@ -1,5 +1,5 @@
 [project]
-name = "hackrf-web"
+name = "aetherscope"
 version = "0.1.0"
 description = "Web interface for HackRF SDR — live waterfall, tuning, security-RX workflows"
 requires-python = ">=3.11"
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-hackrf-web = "backend.app:main"
+aetherscope = "backend.app:main"
 
 [build-system]
 requires = ["hatchling"]

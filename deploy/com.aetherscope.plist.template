@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Template for the hackrf-web launchd LaunchAgent.
+  Template for the Aetherscope launchd LaunchAgent.
 
   Do not load this file directly. Generate a real plist with paths
   substituted by running:
@@ -22,7 +22,7 @@
     <array>
         <string>@@UV_PATH@@</string>
         <string>run</string>
-        <string>hackrf-web</string>
+        <string>aetherscope</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -38,10 +38,10 @@
     <string>Background</string>
 
     <key>StandardOutPath</key>
-    <string>@@HOME@@/Library/Logs/hackrf-web/stdout.log</string>
+    <string>@@HOME@@/Library/Logs/aetherscope/stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>@@HOME@@/Library/Logs/hackrf-web/stderr.log</string>
+    <string>@@HOME@@/Library/Logs/aetherscope/stderr.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

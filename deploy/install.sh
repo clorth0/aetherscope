@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# hackrf-web installer — bootstraps everything you need from a fresh clone.
+# Aetherscope installer — bootstraps everything you need from a fresh clone.
 #
 # What it does:
 #   1. Verifies Homebrew is present
@@ -10,7 +10,7 @@
 #   5. Installs uv (Astral Python package manager) if missing
 #   6. Runs `uv sync` to install Python deps
 #
-# After this, start with: uv run hackrf-web
+# After this, start with: uv run aetherscope
 # Or install as a launchd service: ./deploy/install-launchd.sh
 #
 set -euo pipefail
@@ -80,10 +80,10 @@ printf "  uv              : "; command -v uv               || die "missing"
 
 cat <<EOF
 
-\033[1;32m==> hackrf-web installed.\033[0m
+\033[1;32m==> Aetherscope installed.\033[0m
 
 Start manually:
-    cd $REPO_DIR && uv run hackrf-web
+    cd $REPO_DIR && uv run aetherscope
 
 Install as launchd service (auto-start, restart on crash):
     ./deploy/install-launchd.sh

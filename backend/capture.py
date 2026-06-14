@@ -1,7 +1,7 @@
 """IQ capture via `hackrf_transfer`.
 
 Spawns hackrf_transfer to record signed 8-bit interleaved I/Q to a file
-in ~/hackrf-web/captures/, with a JSON sidecar describing the capture.
+in ~/aetherscope/captures/, with a JSON sidecar describing the capture.
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ log = logging.getLogger(__name__)
 
 HACKRF_TRANSFER = shutil.which("hackrf_transfer") or "/opt/homebrew/bin/hackrf_transfer"
 
-# Captures land next to the repo by default; override with HACKRF_WEB_CAPTURES_DIR
+# Captures land next to the repo by default; override with AETHERSCOPE_CAPTURES_DIR
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-CAPTURES_DIR = Path(os.environ.get("HACKRF_WEB_CAPTURES_DIR") or (_REPO_ROOT / "captures"))
+CAPTURES_DIR = Path(os.environ.get("AETHERSCOPE_CAPTURES_DIR") or (_REPO_ROOT / "captures"))
 
 
 def _slug(label: str) -> str:

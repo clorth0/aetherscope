@@ -1,6 +1,6 @@
-# hackrf-web
+# Aetherscope
 
-Self-hosted browser UI for a [HackRF One](https://greatscottgadgets.com/hackrf/) SDR. Live spectrum + waterfall, single-frequency ISM device decoding via rtl_433, IQ capture-to-disk, ADS-B aircraft tracking on a map, and a multi-phase Auto-Scan that does all of the above sequentially and produces a single report. Designed for a homelab security-RX workflow.
+Aetherscope is a self-hosted browser UI for a [HackRF One](https://greatscottgadgets.com/hackrf/) SDR. Live spectrum + waterfall, single-frequency ISM device decoding via rtl_433, IQ capture-to-disk, ADS-B aircraft tracking on a map, and a multi-phase Auto-Scan that does all of the above sequentially and produces a single report. Designed for a homelab security-RX workflow.
 
 Binds to `127.0.0.1` only — intended to be reached over Tailscale or `ssh -L`.
 
@@ -23,8 +23,8 @@ Binds to `127.0.0.1` only — intended to be reached over Tailscale or `ssh -L`.
 ## Install on macOS (one command)
 
 ```sh
-git clone https://github.com/clorth0/hackrf-web.git
-cd hackrf-web
+git clone https://github.com/clorth0/aetherscope.git
+cd aetherscope
 ./deploy/install.sh
 ```
 
@@ -41,7 +41,7 @@ The installer:
 **Manual** (foreground, kill with Ctrl-C):
 
 ```sh
-uv run hackrf-web
+uv run aetherscope
 ```
 
 **As a managed launchd service** (auto-start on login, restart on crash):
@@ -55,20 +55,20 @@ Then open <http://127.0.0.1:8765/>.
 Useful launchd commands (also printed by the installer):
 
 ```sh
-launchctl print     gui/$(id -u)/local.hackrf-web   # status, pid, last exit
-launchctl kickstart -k gui/$(id -u)/local.hackrf-web   # restart
-launchctl kill SIGTERM gui/$(id -u)/local.hackrf-web   # stop (auto-respawns)
-launchctl bootout      gui/$(id -u)/local.hackrf-web   # disable and unload
-tail -f ~/Library/Logs/hackrf-web/stderr.log
+launchctl print     gui/$(id -u)/local.aetherscope   # status, pid, last exit
+launchctl kickstart -k gui/$(id -u)/local.aetherscope   # restart
+launchctl kill SIGTERM gui/$(id -u)/local.aetherscope   # stop (auto-respawns)
+launchctl bootout      gui/$(id -u)/local.aetherscope   # disable and unload
+tail -f ~/Library/Logs/aetherscope/stderr.log
 ```
 
-Override the service label with `HACKRF_WEB_LABEL=…` if you have a naming convention.
+Override the service label with `AETHERSCOPE_LABEL=…` if you have a naming convention.
 
 ## Configuration
 
 Environment variables, all optional:
 
-- `HACKRF_WEB_CAPTURES_DIR` — where IQ recordings land (defaults to `<repo>/captures/`)
+- `AETHERSCOPE_CAPTURES_DIR` — where IQ recordings land (defaults to `<repo>/captures/`)
 
 ## Why not Docker?
 
