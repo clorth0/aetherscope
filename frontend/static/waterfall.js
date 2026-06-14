@@ -43,6 +43,10 @@ let maxHoldPowers = null;   // Float32Array, per-bin peak hold
 let avgPowers     = null;   // Float32Array, per-bin exponential average
 let lastPeaks     = [];     // most recent detected peaks
 let lastPeakRender = 0;     // throttle timestamp
+let dragStartX    = -1;     // spectrum drag-zoom selection (px), -1 = none
+let dragCurX      = -1;
+let prevRange     = null;   // range before the last zoom, for double-click reset
+let suppressClick = false;  // swallow the click that ends a drag
 let cursorX      = -1;
 let sweepTimestamps = [];
 let events       = [];
@@ -317,6 +321,15 @@ function drawFFT(powers) {
       fftCtx.lineTo(mx + 0.5, plot.y + plot.h);
       fftCtx.stroke();
     }
+  }
+  if (dragStartX >= 0 && dragCurX >= 0) {
+    const zx0 = Math.min(dragStartX, dragCurX);
+    const zx1 = Math.max(dragStartX, dragCurX);
+    fftCtx.fillStyle = "rgba(77, 208, 225, 0.15)";
+    fftCtx.fillRect(zx0, plot.y, zx1 - zx0, plot.h);
+    fftCtx.strokeStyle = "rgba(77, 208, 225, 0.6)";
+    fftCtx.lineWidth = 1;
+    fftCtx.strokeRect(zx0 + 0.5, plot.y + 0.5, zx1 - zx0, plot.h);
   }
   fftCtx.strokeStyle = "#171c25";
   fftCtx.lineWidth = 1;
@@ -941,11 +954,65 @@ function addMark(hz) {
   if (lastSweep) drawFFT(lastSweep.powers);
 }
 function onSpectrumClick(e) {
+  if (suppressClick) { suppressClick = false; return; }
   if (!lastSweep || currentMode !== "sweep") return;
   addMark(freqAtCursor(e));
 }
 fftCanvas.addEventListener("click", onSpectrumClick);
 waterfallCanvas.addEventListener("click", onSpectrumClick);
+
+// Click-drag on the spectrum to zoom into a span; double-click resets.
+function fftXToFreq(xPx) {
+  const rect = fftCanvas.getBoundingClientRect();
+  const plotW = rect.width - FFT_PADDING.left - FFT_PADDING.right;
+  const t = Math.max(0, Math.min(1, (xPx - FFT_PADDING.left) / plotW));
+  return lastSweep.f0 + t * (lastSweep.f1 - lastSweep.f0);
+}
+fftCanvas.addEventListener("mousedown", (e) => {
+  if (!lastSweep || currentMode !== "sweep") return;
+  const rect = fftCanvas.getBoundingClientRect();
+  dragStartX = e.clientX - rect.left;
+  dragCurX = dragStartX;
+});
+fftCanvas.addEventListener("mousemove", (e) => {
+  if (dragStartX < 0) return;
+  const rect = fftCanvas.getBoundingClientRect();
+  dragCurX = e.clientX - rect.left;
+  if (lastSweep) drawFFT(lastSweep.powers);
+});
+window.addEventListener("mouseup", () => {
+  if (dragStartX < 0) return;
+  const x0 = Math.min(dragStartX, dragCurX);
+  const x1 = Math.max(dragStartX, dragCurX);
+  const dragged = (x1 - x0) > 8;
+  if (dragged && lastSweep) {
+    const f0 = fftXToFreq(x0) / 1e6;
+    const f1 = fftXToFreq(x1) / 1e6;
+    dragStartX = -1; dragCurX = -1;
+    if (f1 - f0 >= 0.05) {
+      // hackrf_sweep tunes in ~20 MHz steps, so a narrower span comes back as
+      // a 20 MHz window. Floor the zoom to 20 MHz centered on the selection so
+      // the requested range matches what the hardware actually returns.
+      let z0 = f0, z1 = f1;
+      if (z1 - z0 < 20) { const mid = (z0 + z1) / 2; z0 = Math.max(1, mid - 10); z1 = z0 + 20; }
+      prevRange = { f0: lastSweep.f0 / 1e6, f1: lastSweep.f1 / 1e6 };
+      suppressClick = true;
+      document.getElementById("f_start").value = z0.toFixed(3);
+      document.getElementById("f_stop").value = z1.toFixed(3);
+      socket.emit("start_sweep", readSweepConfig());
+      return;
+    }
+  }
+  dragStartX = -1; dragCurX = -1;
+  if (lastSweep) drawFFT(lastSweep.powers);
+});
+fftCanvas.addEventListener("dblclick", () => {
+  if (!prevRange) return;
+  document.getElementById("f_start").value = prevRange.f0.toFixed(3);
+  document.getElementById("f_stop").value = prevRange.f1.toFixed(3);
+  prevRange = null;
+  socket.emit("start_sweep", readSweepConfig());
+});
 
 function renderMarks() {
   const el = document.getElementById("marks-list");
