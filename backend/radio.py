@@ -42,6 +42,7 @@ SIGNAL_EVERY = 5           # emit a signal-strength reading every Nth block (~2 
 _B_STAGE1 = firwin(63, 100_000, fs=FS_IN)        # anti-alias for the /8 stage
 _B_FM_AUDIO = firwin(63, 15_000, fs=IF_RATE)     # FM mono audio lowpass before /5
 _B_AM_CHAN = firwin(63, 8_000, fs=IF_RATE)       # AM channel lowpass before /5
+_B_NFM_AUDIO = firwin(63, 3_400, fs=IF_RATE)     # NBFM voice audio lowpass before /5
 
 # 75 us de-emphasis (US FM) at AUDIO_RATE, single-pole IIR.
 _DEEMPH_POLE = float(np.exp(-1.0 / (AUDIO_RATE * 75e-6)))
@@ -54,6 +55,7 @@ _A_DCB = [1.0, -0.995]
 
 _FM_GAIN = 12_000.0   # discriminator output (radians) -> int16
 _AM_GAIN = 8_000.0    # envelope -> int16
+_NFM_GAIN = 90_000.0  # narrowband discriminator (small deviation) -> int16
 
 
 def make_state(demod: str) -> dict:
@@ -63,6 +65,10 @@ def make_state(demod: str) -> dict:
         state["last"] = np.complex128(0)
         state["zi_audio"] = np.zeros(len(_B_FM_AUDIO) - 1)
         state["zi_deemph"] = np.zeros(1)
+    elif demod == "nfm":
+        state["last"] = np.complex128(0)
+        state["zi_chan"] = np.zeros(len(_B_AM_CHAN) - 1, dtype=np.complex128)
+        state["zi_audio"] = np.zeros(len(_B_NFM_AUDIO) - 1)
     else:  # am
         state["zi_chan"] = np.zeros(len(_B_AM_CHAN) - 1, dtype=np.complex128)
         state["zi_dcb"] = np.zeros(1)
@@ -98,10 +104,29 @@ def demod_am(iq: np.ndarray, state: dict) -> np.ndarray:
     return _to_int16(a * _AM_GAIN)
 
 
+def demod_nfm(iq: np.ndarray, state: dict) -> np.ndarray:
+    x, state["zi1"] = lfilter(_B_STAGE1, [1.0], iq, zi=state["zi1"])
+    x = x[::DECIM1]
+    x, state["zi_chan"] = lfilter(_B_AM_CHAN, [1.0], x, zi=state["zi_chan"])  # ~8 kHz channel
+
+    prev = np.empty(len(x), dtype=np.complex128)
+    prev[0] = state["last"]
+    prev[1:] = x[:-1]
+    disc = np.angle(x * np.conj(prev))
+    if len(x):
+        state["last"] = x[-1]
+
+    a, state["zi_audio"] = lfilter(_B_NFM_AUDIO, [1.0], disc, zi=state["zi_audio"])
+    a = a[::DECIM2]
+    return _to_int16(a * _NFM_GAIN)
+
+
 def demodulate(iq: np.ndarray, demod: str, state: dict) -> np.ndarray:
     """Demodulate a complex baseband block to mono int16 PCM at AUDIO_RATE."""
     if demod == "fm":
         return demod_fm(iq, state)
+    if demod == "nfm":
+        return demod_nfm(iq, state)
     return demod_am(iq, state)
 
 

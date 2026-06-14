@@ -915,7 +915,12 @@ async function tuneToMark(hz) {
   const mhz = hz / 1e6;
   setMode("radio");
   radioFreqEl.value = mhz.toFixed(1);
-  setRadioDemod(mhz >= 88 && mhz <= 108 ? "fm" : "am");
+  // FM broadcast -> wideband; airband -> AM; everything else (land mobile,
+  // ham, GMRS, business) is most likely narrowband FM.
+  let demod = "nfm";
+  if (mhz >= 88 && mhz <= 108) demod = "fm";
+  else if (mhz >= 108 && mhz < 137) demod = "am";
+  setRadioDemod(demod);
   try {
     await ensureRadioAudio();
   } catch (err) {

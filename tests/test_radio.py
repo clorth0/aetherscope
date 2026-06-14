@@ -43,6 +43,22 @@ def test_fm_recovers_tone():
     assert abs(peak - TONE_HZ) < 80, f"FM recovered {peak:.0f} Hz, expected ~{TONE_HZ:.0f}"
 
 
+def test_nfm_recovers_tone():
+    # Narrowband FM: ~3 kHz deviation (vs 75 kHz for broadcast).
+    dur, dev = 0.5, 3_000.0
+    n = int(FS_IN * dur)
+    t = np.arange(n) / FS_IN
+    msg = np.cos(2 * np.pi * TONE_HZ * t)
+    phase = 2 * np.pi * dev * np.cumsum(msg) / FS_IN
+    iq = np.exp(1j * phase).astype(np.complex64)
+
+    audio = demodulate(iq, "nfm", make_state("nfm"))
+
+    assert len(audio) > 0
+    peak = _dominant_freq(audio, AUDIO_RATE)
+    assert abs(peak - TONE_HZ) < 80, f"NFM recovered {peak:.0f} Hz, expected ~{TONE_HZ:.0f}"
+
+
 def test_am_recovers_tone():
     dur, depth = 0.5, 0.6
     n = int(FS_IN * dur)

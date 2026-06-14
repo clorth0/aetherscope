@@ -565,8 +565,8 @@ def on_start_radio(data):
     except (TypeError, ValueError) as e:
         _emit_toast("error", f"Invalid radio config: {e}")
         return
-    if cfg.demod not in ("fm", "am"):
-        _emit_toast("error", "Invalid demod (use fm or am)")
+    if cfg.demod not in ("fm", "nfm", "am"):
+        _emit_toast("error", "Invalid demod (use fm, nfm, or am)")
         return
     if not (1.0 <= cfg.freq_mhz <= 6000.0):
         _emit_toast("error", "Frequency out of range (1-6000 MHz)")
