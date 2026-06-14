@@ -727,12 +727,17 @@ def on_stop():
 
 @socketio.on("refresh_device")
 def on_refresh_device():
-    try:
-        _device["info"] = probe_hackrf()
-        _device["checked_at"] = time.time()
-    except Exception:
-        log.exception("manual device refresh failed")
-        _device["info"] = None
+    with _state_lock:
+        busy = _state["mode"] != "idle"
+    # Don't probe a device that a running job owns (hackrf_info would fail and
+    # falsely flip the pill to "disconnected"); just re-broadcast current status.
+    if not busy:
+        try:
+            _device["info"] = probe_hackrf()
+            _device["checked_at"] = time.time()
+        except Exception:
+            log.exception("manual device refresh failed")
+            _device["info"] = None
     _emit_device_status()
 
 
