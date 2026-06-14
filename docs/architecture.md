@@ -31,6 +31,10 @@
   sidecar; a per-capture redaction action scrubs it. Position is pushed live as
   `gps_status`; lat/lon never reach the logs. Capture timestamps stay on the
   system clock (the puck has no PPS).
+- **SigMF export.** Alongside each capture's `.iq` + UI sidecar, `sigmf.py`
+  writes a companion `<base>.sigmf-meta` (SigMF 1.0.0) referencing the `.iq` via
+  `core:dataset`, so recordings are portable to other SDR tools. Any geotag rides
+  in `core:geolocation` (GeoJSON Point) and is scrubbed by redaction.
 
 ## Tech stack
 
@@ -44,7 +48,8 @@ Content-Security-Policy, so the app shell works fully offline.
 - `backend/`: Flask app (`app.py`), per-mode subprocess wrappers
   (`sdr.py`, `radio.py`, `decoders.py`, `adsb.py`, `capture.py`, `scan.py`),
   offline `replay.py`, snap-to-peak `tuning.py`, SQLite `store.py`,
-  optional gpsd geotagging `gps.py`, `telemetry.py`, `device.py`.
+  optional gpsd geotagging `gps.py`, SigMF export `sigmf.py`,
+  `telemetry.py`, `device.py`.
 - `frontend/`: `templates/index.html`, `static/` (canvas/UI JS, AudioWorklet,
   CSS, vendored deps).
 - `deploy/`: installers, launchd template, `restart.sh`, `Caddyfile.example`.
