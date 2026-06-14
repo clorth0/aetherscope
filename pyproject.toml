@@ -8,6 +8,7 @@ dependencies = [
     "flask-socketio>=5.4",
     "simple-websocket>=1.0",
     "numpy>=2.0",
+    "scipy>=1.11",
 ]
 
 [project.scripts]
