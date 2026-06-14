@@ -64,6 +64,9 @@ function saveMarks() {
 }
 let marks = loadMarks();
 
+// Bookmarks: populated from status on connect, updated on "bookmarks" events.
+let bookmarks = [];
+
 // Cursor-following frequency label for the spectrum.
 const hoverTag = document.createElement("div");
 hoverTag.className = "hover-tag";
@@ -561,6 +564,7 @@ socket.on("status", (s) => {
   if (s.adsb_config) applyAdsbConfigToInputs(s.adsb_config);
   if (s.scan_config) applyScanConfigToInputs(s.scan_config);
   if (s.radio_config) applyRadioConfigToInputs(s.radio_config);
+  if (Array.isArray(s.bookmarks)) { bookmarks = s.bookmarks; renderBookmarks(); }
 
   // Visible-feedback when the backend transitions out of a running mode:
   // wipe whatever the previous mode was painting so the user can SEE
@@ -1769,12 +1773,124 @@ radioVolEl.addEventListener("input", () => {
 });
 updateSliderFills(["radio_vol"]);
 
-document.querySelectorAll("#radio-presets .band-btn-cap").forEach(b => {
-  b.addEventListener("click", () => {
-    if (b.dataset.demod) setRadioDemod(b.dataset.demod);
-    if (b.dataset.freq) radioFreqEl.value = parseFloat(b.dataset.freq).toFixed(1);
-  });
+// ------------------------------------------------------------------
+// Bookmarks
+// ------------------------------------------------------------------
+socket.on("bookmarks", (msg) => {
+  bookmarks = msg.data || [];
+  renderBookmarks();
 });
+
+function fmtBookmarkFreq(hz) {
+  const mhz = hz / 1e6;
+  return `${mhz.toFixed(3)} MHz`;
+}
+
+function renderBookmarks() {
+  const listEl = document.getElementById("bookmark-list");
+  if (!listEl) return;
+  const filterEl = document.getElementById("bookmark-filter");
+  const q = filterEl ? filterEl.value.trim().toLowerCase() : "";
+  const filtered = bookmarks.filter(bm => {
+    if (!q) return true;
+    const freqText = fmtBookmarkFreq(bm.freq_hz).toLowerCase();
+    const labelText = (bm.label || "").toLowerCase();
+    const tagsText = (bm.tags || []).join(" ").toLowerCase();
+    return labelText.includes(q) || freqText.includes(q) || tagsText.includes(q);
+  });
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="event-empty">${bookmarks.length ? "No bookmarks match the filter." : "No bookmarks yet. Tune to a frequency and click + Add."}</div>`;
+    return;
+  }
+  const rows = filtered.map(bm => {
+    const label = escapeHtml(bm.label || "");
+    const freq  = escapeHtml(fmtBookmarkFreq(bm.freq_hz));
+    const demod = escapeHtml((bm.demod || "fm").toUpperCase());
+    const tags  = (bm.tags || []).map(t => `<span class="bm-tag">${escapeHtml(t)}</span>`).join(" ");
+    const id    = bm.id;
+    return `<div class="bm-row" data-id="${id}">
+      <div class="bm-main">
+        <span class="bm-label">${label}</span>
+        <span class="bm-freq">${freq}</span>
+        <span class="bm-demod">${demod}</span>
+        ${tags ? `<span class="bm-tags">${tags}</span>` : ""}
+      </div>
+      <div class="bm-actions">
+        <button class="btn ghost small bm-tune" data-id="${id}" title="Tune and listen">Tune</button>
+        <button class="btn ghost small bm-edit" data-id="${id}" title="Edit label">Edit</button>
+        <button class="btn ghost small bm-del"  data-id="${id}" title="Delete">×</button>
+      </div>
+    </div>`;
+  });
+  listEl.innerHTML = rows.join("");
+
+  listEl.querySelectorAll(".bm-tune").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.id, 10);
+      const bm = bookmarks.find(b => b.id === id);
+      if (!bm) return;
+      tuneToBookmark(bm);
+    });
+  });
+
+  listEl.querySelectorAll(".bm-edit").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.id, 10);
+      const bm = bookmarks.find(b => b.id === id);
+      if (!bm) return;
+      const newLabel = prompt("Edit label:", bm.label || "");
+      if (newLabel === null) return; // cancelled
+      socket.emit("update_bookmark", { id, label: newLabel.trim() });
+    });
+  });
+
+  listEl.querySelectorAll(".bm-del").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.id, 10);
+      const bm = bookmarks.find(b => b.id === id);
+      if (!bm) return;
+      if (!confirm(`Delete bookmark "${bm.label || fmtBookmarkFreq(bm.freq_hz)}"?`)) return;
+      socket.emit("delete_bookmark", { id });
+    });
+  });
+}
+
+const bookmarkFilterEl = document.getElementById("bookmark-filter");
+if (bookmarkFilterEl) {
+  bookmarkFilterEl.addEventListener("input", renderBookmarks);
+}
+
+document.getElementById("btn-add-bookmark").addEventListener("click", () => {
+  const freq = parseFloat(radioFreqEl.value);
+  if (!Number.isFinite(freq)) return;
+  const labelEl = document.getElementById("bookmark-label");
+  const rawLabel = labelEl ? labelEl.value.trim() : "";
+  const label = rawLabel || `${freq.toFixed(3)} MHz`;
+  socket.emit("add_bookmark", {
+    freq_hz: Math.round(freq * 1e6),
+    demod: radioDemod,
+    label,
+    source: "user",
+  });
+  if (labelEl) labelEl.value = "";
+});
+
+async function tuneToBookmark(bm) {
+  const mhz = bm.freq_hz / 1e6;
+  radioFreqEl.value = mhz.toFixed(1);
+  setRadioDemod(bm.demod || "fm");
+  try {
+    await ensureRadioAudio();
+  } catch (err) {
+    console.error("[aetherscope] audio init failed", err);
+    return;
+  }
+  radioNode.port.postMessage({ type: "flush" });
+  radioPlaying = true;
+  socket.emit("start_radio", { demod: radioDemod, freq_mhz: mhz });
+  setRadioNow("Tuning…", mhz, radioDemod);
+  socket.emit("bump_bookmark", { id: bm.id });
+}
 
 async function ensureRadioAudio() {
   if (radioCtx) {
@@ -1915,5 +2031,6 @@ socket.on("telemetry", (t) => {
 
 // initial
 renderMarks();
+renderBookmarks();
 setMode("sweep");
 requestAnimationFrame(fitAll);

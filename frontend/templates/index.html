@@ -276,17 +276,12 @@
       </section>
 
       <section class="panel">
-        <h2>Presets</h2>
-        <div class="band-buttons" id="radio-presets">
-          <button class="band-btn-cap" data-demod="fm" data-freq="93.9">93.9</button>
-          <button class="band-btn-cap" data-demod="fm" data-freq="97.1">97.1</button>
-          <button class="band-btn-cap" data-demod="fm" data-freq="99.5">99.5</button>
-          <button class="band-btn-cap" data-demod="fm" data-freq="101.1">101.1</button>
-          <button class="band-btn-cap" data-demod="fm" data-freq="105.9">105.9</button>
-          <button class="band-btn-cap" data-demod="fm" data-freq="107.6">107.6</button>
-          <button class="band-btn-cap" data-demod="am" data-freq="118.3">Air 118.3</button>
-          <button class="band-btn-cap" data-demod="am" data-freq="121.5">Air 121.5</button>
-          <button class="band-btn-cap" data-demod="am" data-freq="124.0">Air 124.0</button>
+        <h2>Bookmarks</h2>
+        <input id="bookmark-filter" class="lore-input" type="text" placeholder="filter by tag or text" />
+        <div id="bookmark-list"></div>
+        <div class="row" style="margin-top:6px;gap:4px;">
+          <input id="bookmark-label" type="text" placeholder="label" style="flex:1;" />
+          <button id="btn-add-bookmark" class="btn ghost small">+ Add</button>
         </div>
       </section>
 
