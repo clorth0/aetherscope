@@ -1276,6 +1276,10 @@ function renderCaptures() {
       ? `<span class="cap-geo-badge" title="lat ${geo.lat.toFixed(6)}, lon ${geo.lon.toFixed(6)}">located</span>`
       : (c.geolocation_redacted ? `<span class="cap-geo-badge redacted">location removed</span>` : "");
     const redactBtn = hasGeo ? `<button data-redact="${escapeHtml(c.name)}">Remove location</button>` : "";
+    const sigmfName = c.name.endsWith(".iq") ? c.name.slice(0, -3) + ".sigmf-meta" : "";
+    const sigmfLink = (c.sigmf && sigmfName)
+      ? `<a href="/captures/${encodeURIComponent(sigmfName)}" download title="SigMF metadata (portable to other SDR tools)">SigMF</a>`
+      : "";
     return `
     <div class="cap-row">
       <div class="cap-main">
@@ -1291,6 +1295,7 @@ function renderCaptures() {
       </div>
       <div class="cap-actions">
         <a href="/captures/${encodeURIComponent(c.name)}" download>Download</a>
+        ${sigmfLink}
         <button data-edit="${escapeHtml(c.name)}">Edit</button>
         <button data-replay="${escapeHtml(c.name)}">Replay</button>
         ${redactBtn}

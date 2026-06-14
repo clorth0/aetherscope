@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import telemetry
+from .sigmf import build_sigmf_meta
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +119,7 @@ class IqCapture:
 
         record = self._make_record(finished_at=None, file_size=0)
         self._sidecar.write_text(json.dumps(asdict(record), indent=2))
+        _write_sigmf(record)
 
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -208,6 +210,7 @@ class IqCapture:
             self._sidecar.write_text(json.dumps(asdict(record), indent=2))
         except Exception:
             log.exception("failed to write sidecar")
+        _write_sigmf(record)
 
         if self.on_done:
             try:
@@ -236,6 +239,16 @@ def list_captures() -> list[dict]:
     return items
 
 
+def _write_sigmf(record: "CaptureRecord") -> None:
+    """Write the companion <base>.sigmf-meta for a capture (best effort)."""
+    base = record.name.removesuffix(".iq")
+    meta_path = CAPTURES_DIR / f"{base}.sigmf-meta"
+    try:
+        meta_path.write_text(json.dumps(build_sigmf_meta(asdict(record)), indent=2))
+    except OSError:
+        log.exception("failed to write sigmf-meta %s", meta_path)
+
+
 def redact_location(name: str) -> bool:
     """Strip the geotag from a capture's sidecar (sets geolocation to null and
     marks it redacted). Returns True if the sidecar was updated or already
@@ -243,21 +256,28 @@ def redact_location(name: str) -> bool:
     """
     if "/" in name or ".." in name:
         return False
-    base = name.removesuffix(".iq").removesuffix(".json")
+    base = name.removesuffix(".iq").removesuffix(".json").removesuffix(".sigmf-meta")
     sc = CAPTURES_DIR / f"{base}.json"
     try:
         data = json.loads(sc.read_text())
     except (OSError, json.JSONDecodeError):
         return False
-    if data.get("geolocation") is None and data.get("geolocation_redacted"):
-        return True  # already scrubbed
-    data["geolocation"] = None
-    data["geolocation_redacted"] = True
+    if not (data.get("geolocation") is None and data.get("geolocation_redacted")):
+        data["geolocation"] = None
+        data["geolocation_redacted"] = True
+        try:
+            sc.write_text(json.dumps(data, indent=2))
+        except OSError:
+            log.exception("failed to redact %s", sc)
+            return False
+    # Scrub the companion SigMF meta too, so the standardized export is clean.
+    meta = CAPTURES_DIR / f"{base}.sigmf-meta"
     try:
-        sc.write_text(json.dumps(data, indent=2))
-    except OSError:
-        log.exception("failed to redact %s", sc)
-        return False
+        m = json.loads(meta.read_text())
+        if m.get("global", {}).pop("core:geolocation", None) is not None:
+            meta.write_text(json.dumps(m, indent=2))
+    except (OSError, json.JSONDecodeError):
+        pass
     return True
 
 
@@ -265,11 +285,12 @@ def delete_capture(name: str) -> bool:
     """Delete a capture .iq + sidecar by base filename."""
     if "/" in name or ".." in name:
         return False
-    base = name.removesuffix(".iq").removesuffix(".json")
+    base = name.removesuffix(".iq").removesuffix(".json").removesuffix(".sigmf-meta")
     iq = CAPTURES_DIR / f"{base}.iq"
     sc = CAPTURES_DIR / f"{base}.json"
+    meta = CAPTURES_DIR / f"{base}.sigmf-meta"
     removed = False
-    for p in (iq, sc):
+    for p in (iq, sc, meta):
         try:
             if p.exists():
                 p.unlink()

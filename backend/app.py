@@ -249,6 +249,8 @@ def _enriched_captures() -> list[dict]:
         # Mark missing if the .iq file no longer exists on disk
         iq_path = CAPTURES_DIR / name if name else None
         item["missing"] = not (iq_path and iq_path.exists())
+        meta = CAPTURES_DIR / (name[:-3] + ".sigmf-meta") if name.endswith(".iq") else None
+        item["sigmf"] = bool(meta and meta.exists())
     return items
 
 
