@@ -1288,6 +1288,25 @@ function stopRadioPlayback() {
   radioPlaying = false;
   if (radioNode) radioNode.port.postMessage({ type: "flush" });
   setRadioNow("Stopped", null, "");
+  setRadioSignal(null);
+}
+
+// Map channel power (dBFS) to a 0-100% meter. Measured range at the antenna:
+// ~-60 dBFS = dead/noise floor, ~-15 dBFS = strong station.
+function setRadioSignal(dbfs) {
+  const fill = document.getElementById("radio-meter-fill");
+  const label = document.getElementById("radio-meter-label");
+  if (dbfs == null) {
+    if (fill) { fill.style.width = "0%"; fill.className = "radio-meter-fill"; }
+    if (label) label.textContent = "Signal: —";
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, ((dbfs + 60) / 45) * 100));
+  const cls = pct >= 55 ? "good" : pct >= 25 ? "ok" : "weak";
+  if (fill) { fill.style.width = `${pct.toFixed(0)}%`; fill.className = `radio-meter-fill ${cls}`; }
+  if (label) {
+    label.textContent = `Signal: ${dbfs.toFixed(0)} dBFS${pct < 25 ? " (too weak)" : ""}`;
+  }
 }
 
 document.querySelectorAll("#radio-demod .seg-btn").forEach(b => {
@@ -1372,6 +1391,11 @@ socket.on("radio_audio", (data) => {
   const f32 = new Float32Array(i16.length);
   for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
   radioNode.port.postMessage(f32, [f32.buffer]);
+});
+
+socket.on("radio_signal", (msg) => {
+  if (!radioPlaying) return;
+  setRadioSignal(msg && typeof msg.dbfs === "number" ? msg.dbfs : null);
 });
 
 // initial

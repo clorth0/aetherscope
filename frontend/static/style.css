@@ -1000,3 +1000,28 @@ canvas {
   letter-spacing: 0.1em;
 }
 .radio-now .hint { max-width: 420px; margin-top: 12px; }
+
+.radio-meter {
+  width: 70%;
+  max-width: 360px;
+  height: 10px;
+  margin-top: 14px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.radio-meter-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--fg-faint);
+  transition: width 0.2s ease, background 0.2s ease;
+}
+.radio-meter-fill.weak { background: #e05260; }
+.radio-meter-fill.ok   { background: #e0b94d; }
+.radio-meter-fill.good { background: #4dd06a; }
+.radio-meter-label {
+  font-size: 12px;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}

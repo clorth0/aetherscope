@@ -36,6 +36,7 @@ DECIM2 = 5                 # 250_000 -> 50_000
 AUDIO_RATE = IF_RATE // DECIM2  # 50_000
 # 0.1 s per block; a multiple of DECIM1*DECIM2 so downsample phase stays aligned.
 BLOCK_SAMPLES = 200_000
+SIGNAL_EVERY = 5           # emit a signal-strength reading every Nth block (~2 Hz)
 
 # Fixed filters (rates are fixed).
 _B_STAGE1 = firwin(63, 100_000, fs=FS_IN)        # anti-alias for the /8 stage
@@ -108,6 +109,23 @@ def _to_int16(samples: np.ndarray) -> np.ndarray:
     return np.clip(samples, -32768, 32767).astype(np.int16)
 
 
+def signal_dbfs(iq: np.ndarray) -> float:
+    """Channel power (within ~+-100 kHz of the tuned frequency) in dBFS.
+
+    Uses the same anti-alias filter as the demod chain so adjacent channels
+    do not inflate the reading, then reports mean power relative to full
+    scale. The HackRF has a strong DC / LO-leakage spike at the tuned center,
+    so the constant offset (the block mean) is removed first; otherwise that
+    artifact dominates and every frequency looks alive. The HackRF has no
+    absolute calibration, so this is a relative figure useful for "is there
+    signal here".
+    """
+    iq = iq - iq.mean()  # drop the DC / LO-leakage spike at center
+    x = lfilter(_B_STAGE1, [1.0], iq)
+    p = float(np.mean(x.real ** 2 + x.imag ** 2))
+    return 10.0 * np.log10(p + 1e-12)
+
+
 @dataclass
 class RadioConfig:
     demod: str = "fm"             # "fm" (wideband) | "am"
@@ -119,6 +137,7 @@ class RadioConfig:
 
 
 AudioCallback = Callable[[bytes], None]
+SignalCallback = Callable[[float], None]  # channel power in dBFS
 ExitCallback = Callable[[str], None]  # reason: "stopped" | "died"
 
 
@@ -128,10 +147,12 @@ class RadioReceiver:
         config: RadioConfig,
         on_audio: AudioCallback,
         on_exit: ExitCallback | None = None,
+        on_signal: SignalCallback | None = None,
     ):
         self.config = config
         self.on_audio = on_audio
         self.on_exit = on_exit
+        self.on_signal = on_signal
         self._proc: subprocess.Popen | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -184,6 +205,7 @@ class RadioReceiver:
 
         state = make_state(c.demod)
         block_bytes = BLOCK_SAMPLES * 2  # cs8: 2 signed bytes per complex sample
+        block_i = 0
 
         assert self._proc.stdout is not None
         while not self._stop.is_set():
@@ -199,8 +221,11 @@ class RadioReceiver:
             try:
                 pcm = demodulate(iq, c.demod, state)
                 self.on_audio(pcm.tobytes())
+                if self.on_signal and block_i % SIGNAL_EVERY == 0:
+                    self.on_signal(signal_dbfs(iq))
             except Exception:
                 log.exception("demodulation failed")
+            block_i += 1
 
         log.info("radio receiver exiting")
         if self.on_exit:

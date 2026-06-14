@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np  # noqa: E402
 
-from backend.radio import demodulate, make_state, AUDIO_RATE, FS_IN  # noqa: E402
+from backend.radio import demodulate, make_state, signal_dbfs, AUDIO_RATE, FS_IN  # noqa: E402
 
 TONE_HZ = 1000.0
 
@@ -63,6 +63,45 @@ def test_unknown_demod_falls_back_without_crashing():
     iq = (1.0 + 0.5 * np.cos(2 * np.pi * TONE_HZ * np.arange(100_000) / FS_IN)).astype(np.complex64)
     audio = demodulate(iq, "am", make_state("am"))
     assert audio.dtype == np.int16
+
+
+def test_signal_dbfs_strong_above_weak():
+    np.random.seed(0)
+    n = 200_000
+    t = np.arange(n)
+    # Strong in-channel carrier (~20 kHz from center, amplitude 0.5 -> ~-6 dBFS).
+    strong = (0.5 * np.exp(1j * 2 * np.pi * 0.01 * t)).astype(np.complex64)
+    # Weak broadband noise.
+    weak = (0.001 * (np.random.randn(n) + 1j * np.random.randn(n))).astype(np.complex64)
+
+    s = signal_dbfs(strong)
+    w = signal_dbfs(weak)
+
+    assert s > w + 20, f"strong {s:.1f} dBFS should exceed weak {w:.1f} dBFS by >20"
+    assert -12 < s < 0, f"strong carrier should sit near -6 dBFS, got {s:.1f}"
+
+
+def test_signal_dbfs_ignores_dc_offset():
+    # The HackRF has a strong DC / LO-leakage spike at the tuned center. A pure
+    # DC offset (no modulation) must NOT read as signal, or every dead frequency
+    # looks alive.
+    n = 200_000
+    dc = ((0.5 + 0.5j) * np.ones(n)).astype(np.complex64)
+    tone = (0.05 * np.exp(1j * 2 * np.pi * 0.01 * np.arange(n))).astype(np.complex64)
+    assert signal_dbfs(tone) > signal_dbfs(dc) + 15, (
+        f"DC offset {signal_dbfs(dc):.1f} dBFS should read far below a real "
+        f"tone {signal_dbfs(tone):.1f} dBFS"
+    )
+
+
+def test_signal_dbfs_rejects_out_of_channel():
+    # A carrier far outside the +-100 kHz channel (~600 kHz) should read much
+    # lower than the same carrier in-channel, so adjacent stations don't fool it.
+    n = 200_000
+    t = np.arange(n)
+    inch = (0.5 * np.exp(1j * 2 * np.pi * 0.01 * t)).astype(np.complex64)   # ~20 kHz
+    outch = (0.5 * np.exp(1j * 2 * np.pi * 0.30 * t)).astype(np.complex64)  # ~600 kHz
+    assert signal_dbfs(inch) > signal_dbfs(outch) + 15
 
 
 if __name__ == "__main__":

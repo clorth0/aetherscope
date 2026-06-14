@@ -368,6 +368,7 @@ def _start_radio(cfg: RadioConfig) -> bool:
             cfg,
             on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
             on_exit=_make_exit_handler("radio", gen, "Radio"),
+            on_signal=lambda db: socketio.emit("radio_signal", {"dbfs": db}),
         )
         _state["radio"] = recv
         _state["mode"] = "radio"
