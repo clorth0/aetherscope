@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Run tests (hardware-free, synthetic)
+        run: |
+          uv run python tests/test_sweep.py
+          uv run python tests/test_radio.py
+          uv run python tests/test_bands.py
+          uv run python tests/test_capture.py
+
+      - name: Check frontend JS syntax
+        run: |
+          node --check frontend/static/waterfall.js
+          node --check frontend/static/radio-audio-worklet.js
