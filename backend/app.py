@@ -35,7 +35,23 @@ from .tuning import find_peak_offset
 from .replay import IqReplay
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
+from .store import get_store
 from . import telemetry
+
+PRESETS = [
+    {"freq_hz": 93_900_000,  "demod": "fm", "label": "93.9"},
+    {"freq_hz": 97_100_000,  "demod": "fm", "label": "97.1"},
+    {"freq_hz": 99_500_000,  "demod": "fm", "label": "99.5"},
+    {"freq_hz": 101_100_000, "demod": "fm", "label": "101.1"},
+    {"freq_hz": 105_900_000, "demod": "fm", "label": "105.9"},
+    {"freq_hz": 107_600_000, "demod": "fm", "label": "107.6"},
+    {"freq_hz": 118_300_000, "demod": "am", "label": "Air 118.3"},
+    {"freq_hz": 121_500_000, "demod": "am", "label": "Air 121.5"},
+    {"freq_hz": 124_000_000, "demod": "am", "label": "Air 124.0"},
+]
+
+_SETTING_ALLOWLIST = {"last_mode", "last_radio_freq", "last_demod", "radio_volume"}
+_BOOKMARK_SOURCE_ALLOWLIST = {"user", "mark", "seed"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("aetherscope")
@@ -205,8 +221,27 @@ def _emit_capture_progress(bytes_written: int, expected: int) -> None:
     })
 
 
+def _emit_bookmarks() -> None:
+    socketio.emit("bookmarks", {"data": get_store().list_bookmarks()})
+
+
+def _enriched_captures() -> list[dict]:
+    """Return list_captures() items enriched with store annotations + missing flag."""
+    items = list_captures()
+    for item in items:
+        name = item.get("name", "")
+        ann = get_store().get_capture_annotation(name)
+        item["user_label"] = ann["user_label"]
+        item["notes"] = ann["notes"]
+        item["tags"] = ann["tags"]
+        # Mark missing if the .iq file no longer exists on disk
+        iq_path = CAPTURES_DIR / name if name else None
+        item["missing"] = not (iq_path and iq_path.exists())
+    return items
+
+
 def _emit_captures_list() -> None:
-    socketio.emit("captures", {"items": list_captures()})
+    socketio.emit("captures", {"items": _enriched_captures()})
 
 
 def _emit_adsb(aircraft: list[dict], meta: dict) -> None:
@@ -598,10 +633,12 @@ def on_connect():
             "adsb_config": asdict(_state["adsb_config"]),
             "radio_config": asdict(_state["radio_config"]),
             "scan_config": _state["scan_config"].__dict__,
+            "bookmarks": get_store().list_bookmarks(),
+            "settings": get_store().all_settings(),
         }
     emit("status", snapshot)
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
-    emit("captures", {"items": list_captures()})
+    emit("captures", {"items": _enriched_captures()})
 
 
 def _filter_payload(data, cls):
@@ -778,8 +815,134 @@ def on_list_captures():
 def on_delete_capture(data):
     name = (data or {}).get("name", "")
     if delete_capture(name):
+        get_store().delete_capture_annotation(name)
         _emit_toast("info", f"Deleted {name}")
     _emit_captures_list()
+
+
+@socketio.on("update_capture")
+def on_update_capture(data):
+    data = data or {}
+    try:
+        filename = data["filename"]
+    except KeyError:
+        _emit_toast("error", "update_capture requires filename")
+        return
+    try:
+        get_store().upsert_capture_annotation(
+            filename,
+            data.get("user_label", ""),
+            data.get("notes", ""),
+            data.get("tags", []),
+        )
+    except (ValueError, TypeError) as e:
+        _emit_toast("error", str(e))
+        return
+    _emit_captures_list()
+
+
+@socketio.on("list_bookmarks")
+def on_list_bookmarks():
+    _emit_bookmarks()
+
+
+@socketio.on("add_bookmark")
+def on_add_bookmark(data):
+    data = data or {}
+    try:
+        freq_hz = int(data["freq_hz"])
+        label = data["label"]
+    except (KeyError, TypeError, ValueError):
+        _emit_toast("error", "add_bookmark requires freq_hz (int) and label")
+        return
+    source = data.get("source", "user")
+    if source not in _BOOKMARK_SOURCE_ALLOWLIST:
+        source = "user"
+    try:
+        get_store().add_bookmark(
+            int(time.time()),
+            freq_hz,
+            data.get("demod"),
+            label,
+            data.get("notes", ""),
+            data.get("tags", []),
+            source,
+        )
+    except ValueError as e:
+        _emit_toast("error", str(e))
+        return
+    _emit_bookmarks()
+    _emit_toast("success", f"Bookmark added: {label}")
+
+
+@socketio.on("update_bookmark")
+def on_update_bookmark(data):
+    data = data or {}
+    try:
+        bm_id = int(data["id"])
+    except (KeyError, TypeError, ValueError):
+        _emit_toast("error", "update_bookmark requires id")
+        return
+    fields = {}
+    for key in ("freq_hz", "demod", "label", "notes", "tags"):
+        if key in data:
+            fields[key] = data[key]
+    if "freq_hz" in fields:
+        try:
+            fields["freq_hz"] = int(fields["freq_hz"])
+        except (TypeError, ValueError):
+            _emit_toast("error", "freq_hz must be an integer")
+            return
+    try:
+        result = get_store().update_bookmark(int(time.time()), bm_id, **fields)
+    except ValueError as e:
+        _emit_toast("error", str(e))
+        return
+    if result is None:
+        _emit_toast("error", f"Bookmark {bm_id} not found")
+        return
+    _emit_bookmarks()
+
+
+@socketio.on("delete_bookmark")
+def on_delete_bookmark(data):
+    data = data or {}
+    try:
+        bm_id = int(data["id"])
+    except (KeyError, TypeError, ValueError):
+        _emit_toast("error", "delete_bookmark requires id")
+        return
+    get_store().delete_bookmark(bm_id)
+    _emit_bookmarks()
+
+
+@socketio.on("bump_bookmark")
+def on_bump_bookmark(data):
+    data = data or {}
+    try:
+        bm_id = int(data["id"])
+    except (KeyError, TypeError, ValueError):
+        _emit_toast("error", "bump_bookmark requires id")
+        return
+    get_store().bump_bookmark(int(time.time()), bm_id)
+    _emit_bookmarks()
+
+
+@socketio.on("set_setting")
+def on_set_setting(data):
+    data = data or {}
+    try:
+        key = data["key"]
+        value = data["value"]
+    except KeyError:
+        _emit_toast("error", "set_setting requires key and value")
+        return
+    if key not in _SETTING_ALLOWLIST:
+        return  # silently ignore non-allowlisted keys
+    try:
+        get_store().set_setting(key, value)
+    except Exception as e:
+        _emit_toast("error", str(e))
 
 
 def main() -> None:
@@ -787,6 +950,12 @@ def main() -> None:
     # rely on `-p 127.0.0.1:8765:8765` (and a reverse proxy) for exposure.
     host = os.environ.get("AETHERSCOPE_HOST", "127.0.0.1")
     log.info("Aetherscope listening on http://%s:8765", host)
+    try:
+        seeded = get_store().seed_presets_once(int(time.time()), PRESETS)
+        if seeded:
+            log.info("Seeded %d preset bookmarks", seeded)
+    except Exception:
+        log.exception("Failed to seed presets; continuing without them")
     # Register cleanup for graceful shutdown so we don't orphan subprocesses
     # holding the HackRF when launchd sends SIGTERM.
     atexit.register(_shutdown)
