@@ -1116,3 +1116,36 @@ canvas {
   padding: 2px 0 6px;
 }
 #btn-mark-peak { margin-bottom: 6px; }
+
+/* Diagnostics panel */
+.diag-panel {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  padding: 6px 10px;
+}
+.diag-panel summary {
+  cursor: pointer;
+  color: var(--fg-dim);
+  font: 600 12px var(--ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.diag-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 14px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.diag-k { color: var(--fg-faint); }
+.diag-v { color: var(--fg); font-variant-numeric: tabular-nums; float: right; }
+.diag-log { max-height: 140px; overflow-y: auto; font: 11px ui-monospace, Menlo, monospace; }
+.diag-log-line {
+  color: #e0b94d;
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -1759,6 +1759,34 @@ socket.on("radio_signal", (msg) => {
   setRadioSignal(msg && typeof msg.dbfs === "number" ? msg.dbfs : null);
 });
 
+socket.on("telemetry", (t) => {
+  const c = (t && t.counters) || {};
+  const computed = c.sweeps_computed || 0;
+  const emitted = c.sweeps_emitted || 0;
+  const setT = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+  setT("diag-sweeps", emitted.toLocaleString());
+  setT("diag-dropped", computed > emitted ? (computed - emitted).toLocaleString() : "0");
+  setT("diag-usb", c.usb_warnings || 0);
+  setT("diag-deaths", c.subprocess_deaths || 0);
+  const log = document.getElementById("diag-log");
+  if (!log) return;
+  const recent = (t && t.recent) || [];
+  log.replaceChildren();
+  if (!recent.length) {
+    const e = document.createElement("div");
+    e.className = "event-empty";
+    e.textContent = "No warnings.";
+    log.appendChild(e);
+    return;
+  }
+  recent.slice(-30).reverse().forEach((line) => {
+    const d = document.createElement("div");
+    d.className = "diag-log-line";
+    d.textContent = line;
+    log.appendChild(d);
+  });
+});
+
 // initial
 renderMarks();
 setMode("sweep");

@@ -25,6 +25,8 @@ from typing import Callable
 import numpy as np
 from scipy.signal import firwin, lfilter
 
+from . import telemetry
+
 log = logging.getLogger(__name__)
 
 HACKRF_TRANSFER = shutil.which("hackrf_transfer") or "/opt/homebrew/bin/hackrf_transfer"
@@ -220,13 +222,15 @@ class RadioReceiver:
         log.info("starting: %s", " ".join(cmd))
         try:
             self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
         except FileNotFoundError:
             log.error("hackrf_transfer not found at %s", HACKRF_TRANSFER)
             if self.on_exit:
                 self.on_exit("died")
             return
+        if self._proc.stderr is not None:
+            telemetry.watch_stderr("radio", self._proc.stderr)
 
         state = make_state(c.demod)
         block_bytes = BLOCK_SAMPLES * 2  # cs8: 2 signed bytes per complex sample

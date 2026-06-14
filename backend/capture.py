@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
+from . import telemetry
+
 log = logging.getLogger(__name__)
 
 HACKRF_TRANSFER = shutil.which("hackrf_transfer") or "/opt/homebrew/bin/hackrf_transfer"
@@ -165,11 +167,13 @@ class IqCapture:
 
         try:
             self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             )
         except FileNotFoundError:
             log.error("hackrf_transfer not found at %s", HACKRF_TRANSFER)
             return
+        if self._proc.stderr is not None:
+            telemetry.watch_stderr("capture", self._proc.stderr)
 
         # Poll file size while transfer runs
         assert self._path is not None

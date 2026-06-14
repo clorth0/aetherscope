@@ -15,6 +15,8 @@ from typing import Callable, Iterable, Iterator
 
 import numpy as np
 
+from . import telemetry
+
 log = logging.getLogger(__name__)
 
 HACKRF_SWEEP = shutil.which("hackrf_sweep") or "/opt/homebrew/bin/hackrf_sweep"
@@ -134,13 +136,15 @@ class SweepStreamer:
             self._proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
             )
         except FileNotFoundError:
             log.error("hackrf_sweep binary not found at %s", HACKRF_SWEEP)
             return
+        if self._proc.stderr is not None:
+            telemetry.watch_stderr("sweep", self._proc.stderr)
 
         assert self._proc.stdout is not None
 

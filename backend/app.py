@@ -33,6 +33,7 @@ from .device import probe_hackrf
 from .radio import AUDIO_RATE, RadioConfig, RadioReceiver
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
+from . import telemetry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("aetherscope")
@@ -122,6 +123,7 @@ _sweep_recent: list[float] = []
 
 def _emit_sweep(freqs: np.ndarray, powers: np.ndarray) -> None:
     global _sweep_last_emit
+    telemetry.bump("sweeps_computed")
     now = time.time()
     with _sweep_emit_lock:
         _sweep_recent.append(now)
@@ -135,6 +137,7 @@ def _emit_sweep(freqs: np.ndarray, powers: np.ndarray) -> None:
             return
         _sweep_last_emit = now
 
+    telemetry.bump("sweeps_emitted")
     socketio.emit(
         "sweep",
         {
@@ -252,6 +255,7 @@ def _make_exit_handler(slot: str, gen: int, label: str):
                 return  # superseded
             _state[slot] = None
             _state["mode"] = "idle"
+        telemetry.bump("subprocess_deaths")
         # If the device is gone, the disconnect toast covers this.
         if _device["info"] is not None:
             _emit_toast("error", f"{label} stopped unexpectedly.")
@@ -438,6 +442,7 @@ _SENTINEL = object()
 def _device_poller() -> None:
     last_serial: object = _SENTINEL
     while True:
+        socketio.emit("telemetry", telemetry.snapshot())
         with _state_lock:
             busy = _state["mode"] != "idle"
         if busy:
