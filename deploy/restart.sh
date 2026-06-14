@@ -28,8 +28,9 @@ else
 fi
 
 sleep 2
-if curl -sf -o /dev/null http://127.0.0.1:8765/; then
-    say "http://127.0.0.1:8765/ -> OK (running latest code)"
+PORT="${AETHERSCOPE_PORT:-8765}"
+if curl -sf -o /dev/null "http://127.0.0.1:${PORT}/"; then
+    say "http://127.0.0.1:${PORT}/ -> OK (running latest code)"
 else
     printf "\033[1;31mERROR:\033[0m not responding; check logs:\n" >&2
     printf "    tail -f ~/Library/Logs/aetherscope/stderr.log\n" >&2

@@ -1293,11 +1293,22 @@ def on_clear_inventory(data=None):
     _emit_toast("info", f"Cleared {n} contacts")
 
 
+def resolve_port(raw, default: int = 8765) -> int:
+    """Parse AETHERSCOPE_PORT, falling back to default on missing/invalid/out-of-range."""
+    try:
+        p = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return p if 1 <= p <= 65535 else default
+
+
 def main() -> None:
     # Bind localhost by default; containers set AETHERSCOPE_HOST=0.0.0.0 and
     # rely on `-p 127.0.0.1:8765:8765` (and a reverse proxy) for exposure.
+    # The port is configurable via AETHERSCOPE_PORT (default 8765).
     host = os.environ.get("AETHERSCOPE_HOST", "127.0.0.1")
-    log.info("Aetherscope listening on http://%s:8765", host)
+    port = resolve_port(os.environ.get("AETHERSCOPE_PORT"))
+    log.info("Aetherscope listening on http://%s:%d", host, port)
     try:
         seeded = get_store().seed_presets_once(int(time.time()), PRESETS)
         if seeded:
@@ -1321,7 +1332,7 @@ def main() -> None:
     except Exception:
         log.exception("Failed to read gps_enabled; leaving GPS off")
     _gps.start()
-    socketio.run(app, host=host, port=8765, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == "__main__":
