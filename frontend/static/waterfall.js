@@ -1231,6 +1231,13 @@ const capFilterEl   = document.getElementById("cap-filter");
 
 let captures = [];
 let capFilter = "";
+let capAudio = null;
+
+function playCapture(name) {
+  if (capAudio) { try { capAudio.pause(); } catch (e) { /* ignore */ } }
+  capAudio = new Audio("/captures/" + encodeURIComponent(name));
+  capAudio.play().catch(() => showToast("error", "Could not play audio."));
+}
 
 capFilterEl.addEventListener("input", () => {
   capFilter = capFilterEl.value.trim().toLowerCase();
@@ -1276,28 +1283,35 @@ function renderCaptures() {
       ? `<span class="cap-geo-badge" title="lat ${geo.lat.toFixed(6)}, lon ${geo.lon.toFixed(6)}">located</span>`
       : (c.geolocation_redacted ? `<span class="cap-geo-badge redacted">location removed</span>` : "");
     const redactBtn = hasGeo ? `<button data-redact="${escapeHtml(c.name)}">Remove location</button>` : "";
-    const sigmfName = c.name.endsWith(".iq") ? c.name.slice(0, -3) + ".sigmf-meta" : "";
+    const isAudio = c.kind === "audio";
+    const kindBadge = isAudio ? `<span class="cap-kind-badge">audio</span>` : "";
+    const sigmfName = (!isAudio && c.name.endsWith(".iq")) ? c.name.slice(0, -3) + ".sigmf-meta" : "";
     const sigmfLink = (c.sigmf && sigmfName)
       ? `<a href="/captures/${encodeURIComponent(sigmfName)}" download title="SigMF metadata (portable to other SDR tools)">SigMF</a>`
       : "";
+    const dur = (c.duration_s || 0).toFixed(1);
+    const detail = isAudio
+      ? `${fmtMHz(c.freq_hz)}<span class="sep">·</span>${escapeHtml((c.demod || "").toUpperCase())}<span class="sep">·</span>${dur}s<span class="sep">·</span>${fmtBytes(c.file_size)}`
+      : `${fmtMHz(c.freq_hz)}<span class="sep">·</span>${fmtMSps(c.sample_rate)}<span class="sep">·</span>${dur}s<span class="sep">·</span>${fmtBytes(c.file_size)}`;
+    const metaTail = isAudio
+      ? (c.audio_rate ? `audio ${Math.round(c.audio_rate / 1000)} kHz` : "audio")
+      : escapeHtml(c.sample_format || "");
+    const playOrReplay = isAudio
+      ? `<button data-play="${escapeHtml(c.name)}">Play</button>`
+      : `<button data-replay="${escapeHtml(c.name)}">Replay</button>`;
     return `
     <div class="cap-row">
       <div class="cap-main">
-        <div class="cap-name">${displayName}${missingBadge}${geoBadge}</div>
+        <div class="cap-name">${displayName}${kindBadge}${missingBadge}${geoBadge}</div>
         ${tagsHtml ? `<div class="cap-tags">${tagsHtml}</div>` : ""}
-        <div class="cap-detail">
-          ${fmtMHz(c.freq_hz)}<span class="sep">·</span>
-          ${fmtMSps(c.sample_rate)}<span class="sep">·</span>
-          ${c.duration_s.toFixed(1)}s<span class="sep">·</span>
-          ${fmtBytes(c.file_size)}
-        </div>
-        <div class="cap-meta">${escapeHtml(c.name)} · ${fmtAgo(c.started_at)} · ${escapeHtml(c.sample_format)}</div>
+        <div class="cap-detail">${detail}</div>
+        <div class="cap-meta">${escapeHtml(c.name)} · ${fmtAgo(c.started_at)} · ${metaTail}</div>
       </div>
       <div class="cap-actions">
         <a href="/captures/${encodeURIComponent(c.name)}" download>Download</a>
         ${sigmfLink}
         <button data-edit="${escapeHtml(c.name)}">Edit</button>
-        <button data-replay="${escapeHtml(c.name)}">Replay</button>
+        ${playOrReplay}
         ${redactBtn}
         <button class="danger" data-delete="${escapeHtml(c.name)}">Delete</button>
       </div>
@@ -1337,6 +1351,9 @@ function renderCaptures() {
       socket.emit("start_replay", { name: btn.dataset.replay });
       setMode("sweep");   // watch the recorded spectrogram in the sweep view
     });
+  });
+  capturesListEl.querySelectorAll("[data-play]").forEach(btn => {
+    btn.addEventListener("click", () => playCapture(btn.dataset.play));
   });
   capturesListEl.querySelectorAll("[data-redact]").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -2132,6 +2149,21 @@ document.getElementById("btn-snap-radio").addEventListener("click", (e) => {
   // Backend recenters on the nearest strong carrier (or toasts if not playing);
   // the resulting radio_started refreshes the now-playing frequency.
   socket.emit("snap_radio");
+});
+
+// ---- WAV audio recording (records the live radio audio) ----
+let audioRecording = false;
+const recordBtn = document.getElementById("btn-record-audio");
+function updateRecordBtn() {
+  recordBtn.textContent = audioRecording ? "■ Stop recording" : "● Record";
+  recordBtn.classList.toggle("recording", audioRecording);
+}
+recordBtn.addEventListener("click", () => {
+  socket.emit(audioRecording ? "stop_audio_record" : "start_audio_record", {});
+});
+socket.on("audio_record_status", (s) => {
+  audioRecording = !!(s && s.recording);
+  updateRecordBtn();
 });
 
 // ---- Scanner: cycle the marked frequencies, stop on activity ----

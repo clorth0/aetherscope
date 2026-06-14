@@ -1193,6 +1193,12 @@ canvas {
   vertical-align: middle;
 }
 .cap-geo-badge.redacted { border-color: var(--border, #1e2530); color: var(--fg-dim, #8a93a6); }
+.cap-kind-badge {
+  display: inline-block; margin-left: 6px; padding: 0 5px;
+  background: var(--bg-2, #12151c); border: 1px solid #3a4a6a; border-radius: 4px;
+  font: 11px var(--mono, ui-monospace, Menlo, monospace); color: #7aa2e0; vertical-align: middle;
+}
+.btn.recording { color: #ff6b6b; border-color: #a04040; }
 
 /* Mark save-to-bookmark button */
 .mark-save { color: #e0b94d; }
