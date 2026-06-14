@@ -138,7 +138,10 @@ class Store:
 
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
+        # Reentrant so methods that take the lock can call other locked methods
+        # (e.g. seed_presets_once wraps add_bookmark/get_setting/set_setting in
+        # one atomic critical section).
+        self._lock = threading.RLock()
 
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -369,22 +372,23 @@ class Store:
         Returns count inserted (0 on every call after the first, even if
         some seeded rows were deleted).
         """
-        if self.get_setting("presets_seeded"):
-            return 0
-        count = 0
-        for p in presets:
-            self.add_bookmark(
-                now,
-                p["freq_hz"],
-                p.get("demod"),
-                p["label"],
-                notes=p.get("notes", ""),
-                tags=p.get("tags", ()),
-                source="seed",
-            )
-            count += 1
-        self.set_setting("presets_seeded", True)
-        return count
+        with self._lock:  # atomic check-then-seed (RLock; inner calls re-enter)
+            if self.get_setting("presets_seeded"):
+                return 0
+            count = 0
+            for p in presets:
+                self.add_bookmark(
+                    now,
+                    p["freq_hz"],
+                    p.get("demod"),
+                    p["label"],
+                    notes=p.get("notes", ""),
+                    tags=p.get("tags", ()),
+                    source="seed",
+                )
+                count += 1
+            self.set_setting("presets_seeded", True)
+            return count
 
 
 # ---------------------------------------------------------------------------

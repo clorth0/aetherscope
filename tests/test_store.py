@@ -78,6 +78,21 @@ def test_update_bookmark():
     assert result is None
 
 
+def test_update_bookmark_revalidates():
+    s = _make_store()
+    now = 1_700_000_000
+    b = s.add_bookmark(now, 162_550_000, "nfm", "NOAA 1")
+
+    for bad in ({"freq_hz": 0}, {"label": "x" * 81}, {"demod": "ssb"}):
+        try:
+            s.update_bookmark(now + 1, b["id"], **bad)
+            raise AssertionError(f"update_bookmark accepted invalid {bad}")
+        except ValueError:
+            pass
+    # The row is unchanged after the rejected updates
+    assert s.list_bookmarks()[0]["label"] == "NOAA 1"
+
+
 # ---------------------------------------------------------------------------
 # 4. Delete bookmark
 # ---------------------------------------------------------------------------
