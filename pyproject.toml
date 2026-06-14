@@ -1,6 +1,6 @@
 [project]
 name = "aetherscope"
-version = "0.5.0"
+version = "0.6.0"
 description = "Web interface for HackRF SDR — live waterfall, tuning, security-RX workflows"
 requires-python = ">=3.11"
 dependencies = [
