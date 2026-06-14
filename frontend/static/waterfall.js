@@ -1298,7 +1298,7 @@ function renderCaptures() {
       : escapeHtml(c.sample_format || "");
     const playOrReplay = isAudio
       ? `<button data-play="${escapeHtml(c.name)}">Play</button>`
-      : `<button data-replay="${escapeHtml(c.name)}">Replay</button>`;
+      : `<button data-replay="${escapeHtml(c.name)}">Replay</button> <button data-listen="${escapeHtml(c.name)}">Listen</button>`;
     return `
     <div class="cap-row">
       <div class="cap-main">
@@ -1354,6 +1354,9 @@ function renderCaptures() {
   });
   capturesListEl.querySelectorAll("[data-play]").forEach(btn => {
     btn.addEventListener("click", () => playCapture(btn.dataset.play));
+  });
+  capturesListEl.querySelectorAll("[data-listen]").forEach(btn => {
+    btn.addEventListener("click", () => startIqPlay(btn.dataset.listen, "fm", 0));
   });
   capturesListEl.querySelectorAll("[data-redact]").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -2164,6 +2167,64 @@ recordBtn.addEventListener("click", () => {
 socket.on("audio_record_status", (s) => {
   audioRecording = !!(s && s.recording);
   updateRecordBtn();
+});
+
+// ---- Listen to a saved IQ capture (offset-tunable playback) ----
+const iqPlayBar = document.getElementById("iq-play-bar");
+const iqPlayName = document.getElementById("iq-play-name");
+const iqPlayDemod = document.getElementById("iq-play-demod");
+const iqPlayOffset = document.getElementById("iq-play-offset");
+const iqPlayOffsetVal = document.getElementById("iq-play-offset-val");
+let iqPlayCurrent = null;
+
+async function startIqPlay(name, demod, offset) {
+  setMode("radio");
+  try { await ensureRadioAudio(); }
+  catch (e) { showToast("error", "Audio init failed."); return; }
+  radioNode.port.postMessage({ type: "flush" });
+  radioPlaying = true;
+  iqPlayCurrent = { name, demod, offset };
+  socket.emit("play_capture", { name, demod, offset_hz: offset });
+}
+function retuneIqPlay() {
+  if (!iqPlayCurrent) return;
+  iqPlayCurrent.demod = iqPlayDemod.value;
+  iqPlayCurrent.offset = parseInt(iqPlayOffset.value, 10) || 0;
+  socket.emit("play_capture", {
+    name: iqPlayCurrent.name, demod: iqPlayCurrent.demod, offset_hz: iqPlayCurrent.offset,
+  });
+}
+iqPlayOffset.addEventListener("input", () => {
+  iqPlayOffsetVal.textContent = `${Math.round((parseInt(iqPlayOffset.value, 10) || 0) / 1000)} kHz`;
+});
+iqPlayOffset.addEventListener("change", retuneIqPlay);
+iqPlayDemod.addEventListener("change", retuneIqPlay);
+document.getElementById("iq-play-stop").addEventListener("click", () => {
+  socket.emit("stop");
+  stopRadioPlayback();
+  iqPlayBar.hidden = true;
+  iqPlayCurrent = null;
+});
+socket.on("iq_play_started", (m) => {
+  radioPlaying = true;   // keep audio alive across retunes
+  iqPlayCurrent = { name: m.name, demod: m.demod, offset: m.offset_hz };
+  iqPlayName.textContent = m.name;
+  iqPlayDemod.value = m.demod;
+  const half = Math.floor((m.sample_rate || 2000000) / 2);
+  iqPlayOffset.min = String(-half);
+  iqPlayOffset.max = String(half);
+  iqPlayOffset.step = String(Math.max(1000, Math.round((m.sample_rate || 2000000) / 2000)));
+  iqPlayOffset.value = String(Math.round(m.offset_hz || 0));
+  iqPlayOffsetVal.textContent = `${Math.round((m.offset_hz || 0) / 1000)} kHz`;
+  iqPlayBar.hidden = false;
+});
+socket.on("iq_play_done", (m) => {
+  // "stopped" fires during retune/stop and is handled elsewhere; only a natural
+  // end ("completed") should tear down the playback UI.
+  if (m && m.reason !== "completed") return;
+  iqPlayBar.hidden = true;
+  stopRadioPlayback();
+  iqPlayCurrent = null;
 });
 
 // ---- Scanner: cycle the marked frequencies, stop on activity ----

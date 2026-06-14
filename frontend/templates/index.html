@@ -494,6 +494,21 @@
           stations are strong.
         </p>
       </div>
+      <div class="iq-play-bar" id="iq-play-bar" hidden>
+        <div class="iq-play-title">Playing capture: <span id="iq-play-name"></span></div>
+        <div class="iq-play-controls">
+          <label>Demod
+            <select id="iq-play-demod">
+              <option value="fm">FM</option>
+              <option value="nfm">NFM</option>
+              <option value="am">AM</option>
+            </select>
+          </label>
+          <label>Offset <span id="iq-play-offset-val" class="unit">0 kHz</span></label>
+          <input id="iq-play-offset" type="range" value="0" min="-1000000" max="1000000" step="1000" />
+          <button id="iq-play-stop" class="btn ghost">■ Stop</button>
+        </div>
+      </div>
     </div>
 
     <!-- Capture view -->

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from math import gcd
 
 import numpy as np
@@ -74,6 +75,8 @@ class IqAudioPlayer:
         state = make_state(self.demod)
         sample_i = 0
         block_bytes = self.block_samples * 2  # cs8: 2 bytes per complex sample
+        t0 = time.monotonic()
+        audio_s = 0.0  # seconds of audio emitted so far
         try:
             with open(self.path, "rb") as fh:
                 while not self._stop.is_set():
@@ -92,8 +95,11 @@ class IqAudioPlayer:
                         log.exception("playback demod failed")
                         continue
                     self.on_audio(pcm.tobytes())
-                    # Pace to real time: this block is len(pcm)/AUDIO_RATE seconds.
-                    if self._stop.wait(len(pcm) / AUDIO_RATE):
+                    # Clock-based pacing: only sleep the slack between audio time
+                    # and wall time, so processing cost does not add latency.
+                    audio_s += len(pcm) / AUDIO_RATE
+                    ahead = audio_s - (time.monotonic() - t0)
+                    if ahead > 0 and self._stop.wait(ahead):
                         break
         except OSError:
             log.exception("iq playback read failed: %s", self.path)

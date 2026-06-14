@@ -1200,6 +1200,13 @@ canvas {
 }
 .btn.recording { color: #ff6b6b; border-color: #a04040; }
 
+/* IQ capture playback bar */
+.iq-play-bar { margin-top: 12px; padding: 10px; border: 1px solid var(--border, #1e2530); border-radius: 6px; background: var(--bg-2, #12151c); }
+.iq-play-title { font: 12px var(--mono, ui-monospace, Menlo, monospace); color: var(--fg-dim, #8a93a6); margin-bottom: 8px; }
+.iq-play-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.iq-play-controls select { background: var(--bg-2, #12151c); color: var(--fg, #cfd6e4); border: 1px solid var(--border, #1e2530); border-radius: 4px; padding: 2px 6px; }
+.iq-play-controls input[type=range] { flex: 1; min-width: 120px; }
+
 /* Mark save-to-bookmark button */
 .mark-save { color: #e0b94d; }
 

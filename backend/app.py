@@ -35,6 +35,7 @@ from .device import probe_hackrf
 from .radio import AUDIO_RATE, RadioConfig, RadioReceiver, RadioScanner, ScanRadioConfig
 from .tuning import find_peak_offset
 from .replay import IqReplay
+from .iq_playback import IqAudioPlayer
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
 from .store import get_store
@@ -130,6 +131,8 @@ _state: dict = {
     "radio": None,
     "scan_radio": None,
     "replay": None,
+    "iq_play": None,
+    "decode_file": None,
     "sweep_config": SweepConfig(),
     "decode_config": DecodeConfig(),
     "capture_config": CaptureConfig(),
@@ -316,13 +319,13 @@ def _stop_all_locked() -> None:
     _finalize_audio_record_locked()  # save any in-progress recording first
 
     jobs = []
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio", "replay"):
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio", "replay", "iq_play", "decode_file"):
         if _state[slot]:
             jobs.append((slot, _state[slot]))
 
     was_scanning = _state["mode"] == "scan"
 
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio", "replay"):
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio", "replay", "iq_play", "decode_file"):
         _state[slot] = None
     _state["mode"] = "idle"
 
@@ -572,6 +575,47 @@ def _start_replay(name: str) -> bool:
     return True
 
 
+def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
+    if "/" in name or ".." in name or not name.endswith(".iq"):
+        _emit_toast("error", "Invalid capture")
+        return False
+    match = next((c for c in list_captures() if c.get("name") == name), None)
+    if not match or not match.get("path") or not os.path.exists(match["path"]):
+        _emit_toast("error", "Capture not found")
+        return False
+    if demod not in ("fm", "nfm", "am"):
+        demod = "fm"
+    sr = int(match.get("sample_rate") or 2_000_000)
+    center = int(match.get("freq_hz") or 0)
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+
+        def on_done(reason: str) -> None:
+            with _state_lock:
+                if gen == _current_job_gen and _state["iq_play"] is not None:
+                    _state["iq_play"] = None
+                    if _state["mode"] == "iq_play":
+                        _state["mode"] = "idle"
+            socketio.emit("iq_play_done", {"reason": reason, "name": name})
+            _emit_status()
+
+        player = IqAudioPlayer(
+            match["path"], sr, demod, offset_hz,
+            on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
+            on_done=on_done,
+        )
+        _state["iq_play"] = player
+        _state["mode"] = "iq_play"
+        player.start()
+    # Reuse the radio audio client path (AudioWorklet) for playback.
+    socketio.emit("radio_started", {"sample_rate": AUDIO_RATE, "freq_mhz": center / 1e6, "demod": demod})
+    socketio.emit("iq_play_started", {"name": name, "demod": demod, "offset_hz": offset_hz,
+                                      "center_hz": center, "sample_rate": sr})
+    _emit_status()
+    return True
+
+
 def _start_scan(cfg: ScanConfig) -> bool:
     if _device["info"] is None:
         _emit_toast("error", "Cannot start: HackRF not detected.")
@@ -814,6 +858,25 @@ def on_start_scan_radio(data):
 def on_start_replay(data):
     name = (data or {}).get("name", "")
     if name and _start_replay(name):
+        try:
+            get_store().touch_capture(int(time.time()), name)
+        except Exception:
+            log.exception("touch_capture failed")
+
+
+@socketio.on("play_capture")
+def on_play_capture(data):
+    data = data or {}
+    name = data.get("name")
+    if not isinstance(name, str) or not name:
+        _emit_toast("error", "play_capture requires a name")
+        return
+    demod = data.get("demod", "fm")
+    try:
+        offset = float(data.get("offset_hz", 0) or 0)
+    except (TypeError, ValueError):
+        offset = 0.0
+    if _start_iq_play(name, demod, offset):
         try:
             get_store().touch_capture(int(time.time()), name)
         except Exception:
