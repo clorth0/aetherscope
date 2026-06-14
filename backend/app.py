@@ -46,7 +46,13 @@ app = Flask(
 # Local-only app; session signing key comes from the environment when set,
 # otherwise a fresh random key is generated per process.
 app.secret_key = os.environ.get("AETHERSCOPE_SECRET_KEY") or secrets.token_hex(32)
-socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=[])
+# Same-origin only by default. To run behind a reverse proxy on a different
+# hostname, set AETHERSCOPE_ALLOWED_ORIGINS to a comma-separated list of the
+# exact origins the browser uses, e.g. "https://aetherscope.example.com".
+_allowed_origins = [
+    o.strip() for o in os.environ.get("AETHERSCOPE_ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=_allowed_origins)
 
 # Server-startup timestamp used to bust browser caches whenever the
 # service restarts (so users can't get stuck on stale JS/CSS).

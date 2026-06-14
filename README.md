@@ -70,6 +70,25 @@ Override the service label with `AETHERSCOPE_LABEL=…` if you have a naming con
 Environment variables, all optional:
 
 - `AETHERSCOPE_CAPTURES_DIR` — where IQ recordings land (defaults to `<repo>/captures/`)
+- `AETHERSCOPE_ALLOWED_ORIGINS` — comma-separated extra origins allowed to connect (set this to your proxy domain when running behind a reverse proxy; defaults to same-origin only)
+- `AETHERSCOPE_SECRET_KEY` — Flask session key (defaults to a random per-process key)
+- `AETHERSCOPE_LABEL` — launchd service label override
+
+## Exposing beyond localhost (Caddy + auth)
+
+Aetherscope binds to `127.0.0.1` and has no built-in auth, so it should not
+be put on a public interface directly. To reach it remotely, keep it on
+localhost and front it with a reverse proxy that adds TLS and authentication.
+
+`deploy/Caddyfile.example` is a ready-to-edit recipe using [Caddy](https://caddyserver.com):
+
+1. Generate a password hash: `caddy hash-password --plaintext 'your-password'`
+2. Put it in the `basic_auth` block, set your domain, and `reverse_proxy 127.0.0.1:8765`.
+3. Set `AETHERSCOPE_ALLOWED_ORIGINS=https://your-domain` in the service env so
+   the proxied Socket.IO connection is accepted.
+
+The app stays single-process on localhost; Caddy handles TLS and auth in front.
+Reaching it over Tailscale or an `ssh -L` tunnel needs no proxy at all.
 
 ## Why not Docker?
 

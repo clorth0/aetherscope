@@ -1,0 +1,46 @@
+# Aetherscope reverse proxy (Caddy v2).
+#
+# Puts TLS + HTTP basic auth in front of the localhost-only Aetherscope
+# service. Aetherscope keeps binding to 127.0.0.1, so only Caddy can reach
+# it, and only authenticated users can reach Caddy.
+#
+# Setup:
+#
+#   1. Generate a bcrypt password hash:
+#          caddy hash-password --plaintext 'your-strong-password'
+#      Paste the hash into the basic_auth block below (keep the single quotes
+#      off; the hash goes in verbatim).
+#
+#   2. Tell Aetherscope to accept the proxied origin. Behind a proxy the
+#      browser's Origin is your domain (https://...), not localhost, so set:
+#          AETHERSCOPE_ALLOWED_ORIGINS=https://aetherscope.example.com
+#      For the launchd service, add it to the plist EnvironmentVariables (or
+#      export it before `uv run aetherscope`). If the Socket.IO connection
+#      fails through the proxy, this is almost always why.
+#
+#   3. Reload Caddy:
+#          caddy reload --config /path/to/Caddyfile
+#
+# Note: Caddy 2.8+ uses `basic_auth`; older versions use `basicauth`.
+
+# --- Public domain (Caddy gets a real cert automatically) -----------------
+aetherscope.example.com {
+    basic_auth {
+        # <username>  <bcrypt hash from `caddy hash-password`>
+        admin  $2a$14$REPLACE_WITH_YOUR_BCRYPT_HASH
+    }
+
+    # reverse_proxy upgrades WebSockets (Socket.IO) automatically.
+    reverse_proxy 127.0.0.1:8765
+}
+
+# --- Tailscale-only variant (no public DNS) -------------------------------
+# Reachable at https://<machine>.<tailnet>.ts.net over your tailnet. Use a
+# Tailscale cert, or `tls internal` for a self-signed cert on a LAN name.
+#
+# aetherscope.your-tailnet.ts.net {
+#     basic_auth {
+#         admin  $2a$14$REPLACE_WITH_YOUR_BCRYPT_HASH
+#     }
+#     reverse_proxy 127.0.0.1:8765
+# }
