@@ -370,6 +370,11 @@ function fmtTime(iso) {
   return t ? t[1] : String(iso).slice(-8);
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function summarizeFields(ev) {
   // Skip noisy metadata, surface useful KV pairs
   const skip = new Set(["time", "model", "freq", "freq1", "freq2", "rssi", "snr", "noise", "mod"]);
@@ -377,7 +382,7 @@ function summarizeFields(ev) {
   for (const [k, v] of Object.entries(ev)) {
     if (skip.has(k)) continue;
     if (v === null || v === undefined) continue;
-    parts.push(`<span class="k">${k}=</span><span class="v">${String(v)}</span>`);
+    parts.push(`<span class="k">${escapeHtml(k)}=</span><span class="v">${escapeHtml(v)}</span>`);
     if (parts.length >= 6) break;
   }
   return parts.join("  ");
@@ -396,7 +401,7 @@ function renderEvents() {
     const rssi = ev.rssi_db != null ? `${ev.rssi_db.toFixed(0)} dB` : (ev.rssi != null ? `${ev.rssi}` : "");
     return `<div class="event-row">
       <span class="event-time">${time}</span>
-      <span><span class="event-model">${model}</span> <span class="event-fields">${fields}</span></span>
+      <span><span class="event-model">${escapeHtml(model)}</span> <span class="event-fields">${fields}</span></span>
       <span class="event-rssi">${rssi}</span>
     </div>`;
   });
@@ -894,7 +899,7 @@ function renderCaptures() {
   capturesListEl.innerHTML = filtered.map(c => `
     <div class="cap-row">
       <div class="cap-main">
-        <div class="cap-name">${c.label || c.name}</div>
+        <div class="cap-name">${escapeHtml(c.label || c.name)}</div>
         <div class="cap-detail">
           ${fmtMHz(c.freq_hz)}<span class="sep">·</span>
           ${fmtMSps(c.sample_rate)}<span class="sep">·</span>
@@ -1085,8 +1090,8 @@ function renderAircraftList() {
     .map(a => {
       const hasPos = a.lat != null && a.lon != null;
       return `<div class="ac-row ${hasPos ? "" : "no-pos"}">
-        <span class="ac-hex">${(a.hex || "").toUpperCase()}</span>
-        <span class="ac-flight">${(a.flight || "").trim() || "—"}</span>
+        <span class="ac-hex">${escapeHtml((a.hex || "").toUpperCase())}</span>
+        <span class="ac-flight">${escapeHtml((a.flight || "").trim() || "—")}</span>
         <span class="ac-alt">${fmtAlt(a.alt_baro)}</span>
         <span class="ac-spd">${fmtKnots(a.gs)}</span>
         <span class="ac-track">${fmtTrack(a.track)}</span>
@@ -1287,7 +1292,7 @@ function summarizeDeviceFields(d) {
   for (const [k, v] of Object.entries(d)) {
     if (skip.has(k)) continue;
     if (v == null) continue;
-    parts.push(`${k}=${v}`);
+    parts.push(`${escapeHtml(k)}=${escapeHtml(v)}`);
     if (parts.length >= 5) break;
   }
   return parts.join("  ");
@@ -1333,7 +1338,7 @@ function renderScanResults(isFinal, findings, summary) {
         ? `<div class="empty">No devices decoded.</div>`
         : devices.map(d => `
           <div class="scan-device-row">
-            <span class="model">${d.model || "unknown"}</span>
+            <span class="model">${escapeHtml(d.model || "unknown")}</span>
             <span class="fields">${summarizeDeviceFields(d)}</span>
             <span class="count">×${d._count}</span>
           </div>`).join("")
@@ -1349,8 +1354,8 @@ function renderScanResults(isFinal, findings, summary) {
       ? `<div class="empty">No aircraft tracked.</div>`
       : aircraft.map(a => `
         <div class="scan-ac-row">
-          <span class="hex">${(a.hex || "").toUpperCase()}</span>
-          <span class="flight">${(a.flight || "").trim() || "—"}</span>
+          <span class="hex">${escapeHtml((a.hex || "").toUpperCase())}</span>
+          <span class="flight">${escapeHtml((a.flight || "").trim() || "—")}</span>
           <span class="alt">${a.alt_baro != null ? a.alt_baro + " ft" : "—"}</span>
           <span class="spd">${a.gs != null ? Math.round(a.gs) + " kts" : "—"}</span>
           <span class="pos">${a.lat != null ? a.lat.toFixed(3) + ", " + a.lon.toFixed(3) : "no position"}</span>
