@@ -37,6 +37,10 @@ let currentMode    = "sweep";       // UI tab (sweep | decode | capture | adsb |
 let serverMode     = "idle";        // backend mode (idle | sweep | decode | capture | adsb | scan)
 let prevServerMode = "idle";        // last seen serverMode — used to detect transitions
 let lastSweep    = null;
+let maxHoldOn    = false;
+let avgOn        = false;
+let maxHoldPowers = null;   // Float32Array, per-bin peak hold
+let avgPowers     = null;   // Float32Array, per-bin exponential average
 let cursorX      = -1;
 let sweepTimestamps = [];
 let events       = [];
@@ -269,6 +273,25 @@ function drawFFT(powers) {
     }
     fftCtx.stroke();
     fftCtx.shadowBlur = 0;
+  }
+  // max-hold / average overlay traces (drawn over the live trace)
+  if (lastSweep) {
+    const drawOverlay = (arr, color) => {
+      if (!arr) return;
+      const s = resampleMax(arr, Math.floor(plot.w));
+      const xs = plot.w / s.length;
+      fftCtx.strokeStyle = color;
+      fftCtx.lineWidth = 1;
+      fftCtx.beginPath();
+      for (let i = 0; i < s.length; i++) {
+        const y = plot.y + (1 - (s[i] - POWER_MIN) / (POWER_MAX - POWER_MIN)) * plot.h;
+        const x = plot.x + i * xs;
+        if (i === 0) fftCtx.moveTo(x, y); else fftCtx.lineTo(x, y);
+      }
+      fftCtx.stroke();
+    };
+    if (maxHoldOn) drawOverlay(maxHoldPowers, "rgba(224, 149, 77, 0.85)"); // amber
+    if (avgOn) drawOverlay(avgPowers, "rgba(160, 120, 255, 0.85)");        // violet
   }
   if (cursorX >= 0 && cursorX <= w) {
     fftCtx.strokeStyle = "rgba(255, 255, 255, 0.4)";
@@ -545,6 +568,35 @@ function clearAdsbVisuals() {
   if (currentMode === "adsb") renderAircraftList();
 }
 
+function updateHoldTraces(p) {
+  if (maxHoldOn) {
+    if (!maxHoldPowers || maxHoldPowers.length !== p.length) maxHoldPowers = Float32Array.from(p);
+    else for (let i = 0; i < p.length; i++) { if (p[i] > maxHoldPowers[i]) maxHoldPowers[i] = p[i]; }
+  }
+  if (avgOn) {
+    if (!avgPowers || avgPowers.length !== p.length) avgPowers = Float32Array.from(p);
+    else { const a = 0.2; for (let i = 0; i < p.length; i++) avgPowers[i] = avgPowers[i] * (1 - a) + p[i] * a; }
+  }
+}
+
+document.getElementById("btn-maxhold").addEventListener("click", (e) => {
+  maxHoldOn = !maxHoldOn;
+  maxHoldPowers = null;
+  e.currentTarget.classList.toggle("active", maxHoldOn);
+  if (lastSweep) drawFFT(lastSweep.powers);
+});
+document.getElementById("btn-avg").addEventListener("click", (e) => {
+  avgOn = !avgOn;
+  avgPowers = null;
+  e.currentTarget.classList.toggle("active", avgOn);
+  if (lastSweep) drawFFT(lastSweep.powers);
+});
+document.getElementById("btn-trace-clear").addEventListener("click", () => {
+  maxHoldPowers = null;
+  avgPowers = null;
+  if (lastSweep) drawFFT(lastSweep.powers);
+});
+
 socket.on("sweep", (msg) => {
   const rangeChanged = !lastSweep
     || Math.abs(lastSweep.f0 - msg.f0) > 1
@@ -554,6 +606,8 @@ socket.on("sweep", (msg) => {
     wfCtx.clearRect(0, 0, wr.width, wr.height);
   }
   lastSweep = { f0: msg.f0, f1: msg.f1, powers: msg.powers };
+  if (rangeChanged) { maxHoldPowers = null; avgPowers = null; }
+  updateHoldTraces(msg.powers);
   if (currentMode === "sweep") {
     drawFFT(msg.powers);
     pushWaterfallRow(msg.powers);
@@ -684,6 +738,8 @@ document.querySelectorAll(".chip").forEach(b => {
 
 function clearSweepVisuals() {
   lastSweep = null;
+  maxHoldPowers = null;
+  avgPowers = null;
   const fr = fftCanvas.getBoundingClientRect();
   fftCtx.clearRect(0, 0, fr.width, fr.height);
   const wr = waterfallCanvas.getBoundingClientRect();

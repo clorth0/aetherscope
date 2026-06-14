@@ -1078,3 +1078,21 @@ canvas {
   color: var(--fg);
 }
 .mark-del { color: var(--fg-dim); }
+
+/* Spectrum trace toolbar (max-hold / average) */
+.trace-toolbar { display: flex; gap: 6px; padding: 6px 0 2px; }
+.trace-btn {
+  appearance: none;
+  background: var(--bg-2);
+  color: var(--fg-dim);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 4px 10px;
+  font: 600 12px var(--ui);
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.trace-btn:hover { color: var(--fg); }
+.trace-btn.active { color: var(--bg-0); background: var(--accent); border-color: var(--accent); }
+#btn-maxhold.active { background: #e0954d; border-color: #e0954d; }   /* amber, matches trace */
+#btn-avg.active     { background: #a078ff; border-color: #a078ff; }   /* violet, matches trace */
