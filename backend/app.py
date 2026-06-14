@@ -228,12 +228,13 @@ def _emit_bookmarks() -> None:
 def _enriched_captures() -> list[dict]:
     """Return list_captures() items enriched with store annotations + missing flag."""
     items = list_captures()
+    anns = get_store().list_capture_annotations()  # one query, dict lookup per item
     for item in items:
         name = item.get("name", "")
-        ann = get_store().get_capture_annotation(name)
-        item["user_label"] = ann["user_label"]
-        item["notes"] = ann["notes"]
-        item["tags"] = ann["tags"]
+        ann = anns.get(name)
+        item["user_label"] = ann["user_label"] if ann else ""
+        item["notes"] = ann["notes"] if ann else ""
+        item["tags"] = ann["tags"] if ann else []
         # Mark missing if the .iq file no longer exists on disk
         iq_path = CAPTURES_DIR / name if name else None
         item["missing"] = not (iq_path and iq_path.exists())
@@ -633,9 +634,12 @@ def on_connect():
             "adsb_config": asdict(_state["adsb_config"]),
             "radio_config": asdict(_state["radio_config"]),
             "scan_config": _state["scan_config"].__dict__,
-            "bookmarks": get_store().list_bookmarks(),
-            "settings": get_store().all_settings(),
         }
+    # Store I/O stays outside _state_lock (same rule as _emit_status): never
+    # hold the state lock across SQLite calls. bookmarks/settings ride the
+    # initial connect snapshot only; _emit_status() intentionally omits them.
+    snapshot["bookmarks"] = get_store().list_bookmarks()
+    snapshot["settings"] = get_store().all_settings()
     emit("status", snapshot)
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
     emit("captures", {"items": _enriched_captures()})

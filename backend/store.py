@@ -332,6 +332,15 @@ class Store:
             }
         return _cap_dict(row)
 
+    def list_capture_annotations(self) -> dict:
+        """Return {filename: annotation dict} for all rows, in one query.
+
+        Lets callers enrich a directory of captures without an N+1 query loop.
+        """
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM captures").fetchall()
+        return {r["filename"]: _cap_dict(r) for r in rows}
+
     def upsert_capture_annotation(
         self,
         filename: str,

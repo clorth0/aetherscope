@@ -253,6 +253,18 @@ def test_capture_annotation():
     assert s.delete_capture_annotation(fname) is False
 
 
+def test_list_capture_annotations():
+    s = _make_store()
+    assert s.list_capture_annotations() == {}
+    s.upsert_capture_annotation("a.iq", user_label="A", tags=["x"])
+    s.upsert_capture_annotation("b.iq", notes="bee")
+    anns = s.list_capture_annotations()
+    assert set(anns) == {"a.iq", "b.iq"}
+    assert anns["a.iq"]["user_label"] == "A"
+    assert anns["a.iq"]["tags"] == ["x"]
+    assert anns["b.iq"]["notes"] == "bee"
+
+
 # ---------------------------------------------------------------------------
 # 10. Seed presets once
 # ---------------------------------------------------------------------------
