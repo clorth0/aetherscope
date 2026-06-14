@@ -30,6 +30,7 @@ from .adsb import AdsbConfig, AdsbReceiver
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, delete_capture, list_captures
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
+from .radio import AUDIO_RATE, RadioConfig, RadioReceiver
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
 
@@ -79,17 +80,19 @@ _state_lock = threading.RLock()
 _current_job_gen = 0
 
 _state: dict = {
-    "mode": "idle",             # "idle" | "sweep" | "decode" | "capture" | "adsb" | "scan"
+    "mode": "idle",             # "idle" | "sweep" | "decode" | "capture" | "adsb" | "scan" | "radio"
     "streamer": None,
     "decoder": None,
     "capture": None,
     "adsb": None,
     "scanner": None,
+    "radio": None,
     "sweep_config": SweepConfig(),
     "decode_config": DecodeConfig(),
     "capture_config": CaptureConfig(),
     "adsb_config": AdsbConfig(),
     "scan_config": ScanConfig(),
+    "radio_config": RadioConfig(),
 }
 _device: dict = {"info": None, "checked_at": 0.0}
 
@@ -150,6 +153,7 @@ def _emit_status() -> None:
             "decode_config": asdict(_state["decode_config"]),
             "capture_config": asdict(_state["capture_config"]),
             "adsb_config": asdict(_state["adsb_config"]),
+            "radio_config": asdict(_state["radio_config"]),
             "scan_config": _state["scan_config"].__dict__,
         }
     socketio.emit("status", snapshot)
@@ -196,13 +200,13 @@ def _stop_all_locked() -> None:
     then synchronously tear down subprocesses. Caller MUST hold _state_lock.
     """
     jobs = []
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner"):
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio"):
         if _state[slot]:
             jobs.append((slot, _state[slot]))
 
     was_scanning = _state["mode"] == "scan"
 
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner"):
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio"):
         _state[slot] = None
     _state["mode"] = "idle"
 
@@ -352,6 +356,30 @@ def _start_adsb(cfg: AdsbConfig) -> bool:
     return True
 
 
+def _start_radio(cfg: RadioConfig) -> bool:
+    if _device["info"] is None:
+        _emit_toast("error", "Cannot start: HackRF not detected.")
+        return False
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+        _state["radio_config"] = cfg
+        recv = RadioReceiver(
+            cfg,
+            on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
+            on_exit=_make_exit_handler("radio", gen, "Radio"),
+        )
+        _state["radio"] = recv
+        _state["mode"] = "radio"
+        recv.start()
+    socketio.emit(
+        "radio_started",
+        {"sample_rate": AUDIO_RATE, "freq_mhz": cfg.freq_mhz, "demod": cfg.demod},
+    )
+    _emit_status()
+    return True
+
+
 def _start_scan(cfg: ScanConfig) -> bool:
     if _device["info"] is None:
         _emit_toast("error", "Cannot start: HackRF not detected.")
@@ -470,6 +498,7 @@ def on_connect():
             "decode_config": asdict(_state["decode_config"]),
             "capture_config": asdict(_state["capture_config"]),
             "adsb_config": asdict(_state["adsb_config"]),
+            "radio_config": asdict(_state["radio_config"]),
             "scan_config": _state["scan_config"].__dict__,
         }
     emit("status", snapshot)
@@ -520,6 +549,22 @@ def on_start_adsb(data):
         _emit_toast("error", f"Invalid ADS-B config: {e}")
         return
     _start_adsb(cfg)
+
+
+@socketio.on("start_radio")
+def on_start_radio(data):
+    try:
+        cfg = RadioConfig(**_filter_payload(data, RadioConfig))
+    except (TypeError, ValueError) as e:
+        _emit_toast("error", f"Invalid radio config: {e}")
+        return
+    if cfg.demod not in ("fm", "am"):
+        _emit_toast("error", "Invalid demod (use fm or am)")
+        return
+    if not (1.0 <= cfg.freq_mhz <= 6000.0):
+        _emit_toast("error", "Frequency out of range (1-6000 MHz)")
+        return
+    _start_radio(cfg)
 
 
 @socketio.on("start_scan")

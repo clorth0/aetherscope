@@ -12,6 +12,7 @@ Binds to `127.0.0.1` only — intended to be reached over Tailscale or `ssh -L`.
 | **Decode** | Live ISM-band device decoding (315/433/868/915 MHz) | `rtl_433` w/ SoapySDR |
 | **Capture** | Record IQ to disk + JSON sidecar | `hackrf_transfer` |
 | **ADS-B** | Aircraft tracking with Leaflet dark-tile map | `readsb-hackrf` |
+| **Radio** | Listen to audio in the browser, AM/FM toggle (FM broadcast 88-108 MHz, AM airband 118-137 MHz) | `hackrf_transfer` + numpy/scipy demod |
 | **Auto-Scan** | Sequential pipeline: sweep → ISM 433 → ISM 915 → ADS-B → report | all of the above |
 
 ## Requirements

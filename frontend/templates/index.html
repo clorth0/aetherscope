@@ -30,6 +30,7 @@
     <button class="mode-tab" data-mode="capture"><span class="tab-running-dot"></span>Capture</button>
     <button class="mode-tab" data-mode="adsb"><span class="tab-running-dot"></span>ADS-B</button>
     <button class="mode-tab" data-mode="scan"><span class="tab-running-dot"></span>Auto-Scan</button>
+    <button class="mode-tab" data-mode="radio"><span class="tab-running-dot"></span>Radio</button>
   </nav>
   <div class="topbar-spacer"></div>
   <div class="stat" id="stat-sweep">
@@ -222,6 +223,62 @@
       </section>
     </div>
 
+    <!-- Radio (AM/FM) mode controls -->
+    <div class="mode-pane" id="pane-radio" hidden>
+      <section class="panel">
+        <h2>Tune</h2>
+        <div class="row">
+          <label>Demod</label>
+          <div class="seg" id="radio-demod">
+            <button class="seg-btn active" data-demod="fm">FM</button>
+            <button class="seg-btn" data-demod="am">AM</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>Frequency <span class="unit">MHz</span></label>
+          <div class="freq-tune">
+            <button class="step-btn" id="radio-down" title="Down 0.1 MHz">−</button>
+            <input id="radio_freq" type="number" value="101.1" min="1" max="6000" step="0.1" />
+            <button class="step-btn" id="radio-up" title="Up 0.1 MHz">+</button>
+          </div>
+        </div>
+        <div class="row slider-row">
+          <label>Volume <span id="radio_vol_val" class="unit">80%</span></label>
+          <input id="radio_vol" type="range" value="80" min="0" max="100" step="1" />
+        </div>
+      </section>
+
+      <section class="panel actions">
+        <button id="btn-start-radio" class="btn primary">▶ Listen</button>
+        <button id="btn-stop-radio" class="btn ghost">■ Stop</button>
+      </section>
+
+      <section class="panel">
+        <h2>Presets</h2>
+        <div class="band-buttons" id="radio-presets">
+          <button class="band-btn-cap" data-demod="fm" data-freq="93.9">93.9</button>
+          <button class="band-btn-cap" data-demod="fm" data-freq="97.1">97.1</button>
+          <button class="band-btn-cap" data-demod="fm" data-freq="99.5">99.5</button>
+          <button class="band-btn-cap" data-demod="fm" data-freq="101.1">101.1</button>
+          <button class="band-btn-cap" data-demod="fm" data-freq="105.9">105.9</button>
+          <button class="band-btn-cap" data-demod="fm" data-freq="107.6">107.6</button>
+          <button class="band-btn-cap" data-demod="am" data-freq="118.3">Air 118.3</button>
+          <button class="band-btn-cap" data-demod="am" data-freq="121.5">Air 121.5</button>
+          <button class="band-btn-cap" data-demod="am" data-freq="124.0">Air 124.0</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>About</h2>
+        <p class="hint">
+          FM is wideband broadcast (88 to 108 MHz). AM covers airband
+          (118 to 137 MHz aviation voice) and other AM signals above 1 MHz.
+          The mediumwave AM broadcast band sits below the HackRF tuning
+          floor, so it is not receivable here without an upconverter.
+        </p>
+      </section>
+    </div>
+
     <!-- Capture mode controls -->
     <div class="mode-pane" id="pane-capture" hidden>
       <section class="panel">
@@ -358,6 +415,20 @@
       </div>
       <div class="aircraft-list" id="aircraft-list">
         <div class="event-empty">No aircraft yet. Start ADS-B in the sidebar.</div>
+      </div>
+    </div>
+
+    <!-- Radio view -->
+    <div class="view" id="view-radio" hidden>
+      <div class="radio-now">
+        <div class="radio-now-state" id="radio-now-state">Stopped</div>
+        <div class="radio-now-freq" id="radio-now-freq">—</div>
+        <div class="radio-now-demod" id="radio-now-demod"></div>
+        <p class="hint" id="radio-now-hint">
+          Pick a frequency and hit <strong>Listen</strong> in the sidebar.
+          Tip: run a <strong>Sweep</strong> over 88 to 108 first to see which
+          stations are strong.
+        </p>
       </div>
     </div>
 

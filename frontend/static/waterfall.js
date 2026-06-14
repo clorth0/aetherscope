@@ -30,6 +30,8 @@ const paneDecode  = document.getElementById("pane-decode");
 const paneCapture = document.getElementById("pane-capture");
 const paneAdsb    = document.getElementById("pane-adsb");
 const paneScan    = document.getElementById("pane-scan");
+const viewRadio   = document.getElementById("view-radio");
+const paneRadio   = document.getElementById("pane-radio");
 
 let currentMode    = "sweep";       // UI tab (sweep | decode | capture | adsb | scan)
 let serverMode     = "idle";        // backend mode (idle | sweep | decode | capture | adsb | scan)
@@ -58,11 +60,13 @@ function setMode(mode) {
   viewCapture.hidden = mode !== "capture";
   viewAdsb.hidden    = mode !== "adsb";
   viewScan.hidden    = mode !== "scan";
+  viewRadio.hidden   = mode !== "radio";
   paneSweep.hidden   = mode !== "sweep";
   paneDecode.hidden  = mode !== "decode";
   paneCapture.hidden = mode !== "capture";
   paneAdsb.hidden    = mode !== "adsb";
   paneScan.hidden    = mode !== "scan";
+  paneRadio.hidden   = mode !== "radio";
   document.querySelectorAll(".mode-tab").forEach(t => {
     t.classList.toggle("active", t.dataset.mode === mode);
   });
@@ -451,6 +455,7 @@ socket.on("status", (s) => {
   if (s.capture_config) applyCaptureConfigToInputs(s.capture_config);
   if (s.adsb_config) applyAdsbConfigToInputs(s.adsb_config);
   if (s.scan_config) applyScanConfigToInputs(s.scan_config);
+  if (s.radio_config) applyRadioConfigToInputs(s.radio_config);
 
   // Visible-feedback when the backend transitions out of a running mode:
   // wipe whatever the previous mode was painting so the user can SEE
@@ -466,6 +471,7 @@ socket.on("status", (s) => {
 function onServerLeftMode(prevMode) {
   if (prevMode === "sweep")   clearSweepVisuals();
   if (prevMode === "adsb")    clearAdsbVisuals();
+  if (prevMode === "radio")   stopRadioPlayback();
   // capture/scan have their own dedicated "done" / "stopped" events
 }
 
@@ -1240,6 +1246,133 @@ function renderScanResults(isFinal, findings, summary) {
 
   scanResultsEl.innerHTML = sections.join("");
 }
+
+// ------------------------------------------------------------------
+// Radio (AM/FM) mode
+// ------------------------------------------------------------------
+let radioCtx = null;
+let radioNode = null;
+let radioGain = null;
+let radioPlaying = false;
+let radioDemod = "fm";
+let radioRate = 50000;
+
+const radioFreqEl = document.getElementById("radio_freq");
+const radioVolEl  = document.getElementById("radio_vol");
+const radioVolVal = document.getElementById("radio_vol_val");
+
+function radioVolume() { return (parseInt(radioVolEl.value, 10) || 0) / 100; }
+
+function setRadioDemod(demod) {
+  radioDemod = demod;
+  document.querySelectorAll("#radio-demod .seg-btn").forEach(x =>
+    x.classList.toggle("active", x.dataset.demod === demod));
+}
+
+function setRadioNow(state, freq, demod) {
+  const s = document.getElementById("radio-now-state");
+  const f = document.getElementById("radio-now-freq");
+  const d = document.getElementById("radio-now-demod");
+  if (s) { s.textContent = state; s.classList.toggle("live", state === "Playing"); }
+  if (f) f.textContent = (freq != null) ? `${parseFloat(freq).toFixed(1)} MHz` : "—";
+  if (d) d.textContent = demod ? demod.toUpperCase() : "";
+}
+
+function applyRadioConfigToInputs(c) {
+  if (!c) return;
+  if (c.freq_mhz != null) radioFreqEl.value = parseFloat(c.freq_mhz).toFixed(1);
+  if (c.demod) setRadioDemod(c.demod);
+}
+
+function stopRadioPlayback() {
+  radioPlaying = false;
+  if (radioNode) radioNode.port.postMessage({ type: "flush" });
+  setRadioNow("Stopped", null, "");
+}
+
+document.querySelectorAll("#radio-demod .seg-btn").forEach(b => {
+  b.addEventListener("click", () => setRadioDemod(b.dataset.demod));
+});
+
+document.getElementById("radio-up").addEventListener("click", () => {
+  radioFreqEl.value = (parseFloat(radioFreqEl.value || "0") + 0.1).toFixed(1);
+});
+document.getElementById("radio-down").addEventListener("click", () => {
+  radioFreqEl.value = (parseFloat(radioFreqEl.value || "0") - 0.1).toFixed(1);
+});
+
+radioVolEl.addEventListener("input", () => {
+  radioVolVal.textContent = `${radioVolEl.value}%`;
+  if (radioGain) radioGain.gain.value = radioVolume();
+  updateSliderFills(["radio_vol"]);
+});
+updateSliderFills(["radio_vol"]);
+
+document.querySelectorAll("#radio-presets .band-btn-cap").forEach(b => {
+  b.addEventListener("click", () => {
+    if (b.dataset.demod) setRadioDemod(b.dataset.demod);
+    if (b.dataset.freq) radioFreqEl.value = parseFloat(b.dataset.freq).toFixed(1);
+  });
+});
+
+async function ensureRadioAudio() {
+  if (radioCtx) {
+    if (radioCtx.state === "suspended") await radioCtx.resume();
+    return;
+  }
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  radioCtx = new Ctx();
+  await radioCtx.audioWorklet.addModule("/static/radio-audio-worklet.js");
+  radioNode = new AudioWorkletNode(radioCtx, "radio-player", {
+    numberOfInputs: 0,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+    processorOptions: { producerRate: radioRate },
+  });
+  radioGain = radioCtx.createGain();
+  radioGain.gain.value = radioVolume();
+  radioNode.connect(radioGain).connect(radioCtx.destination);
+}
+
+document.getElementById("btn-start-radio").addEventListener("click", async (e) => {
+  flashClick(e.currentTarget, "start_radio");
+  const freq = parseFloat(radioFreqEl.value);
+  if (!Number.isFinite(freq)) return;
+  try {
+    await ensureRadioAudio();
+  } catch (err) {
+    console.error("[aetherscope] audio init failed", err);
+    return;
+  }
+  radioNode.port.postMessage({ type: "flush" });
+  radioPlaying = true;
+  socket.emit("start_radio", { demod: radioDemod, freq_mhz: freq });
+  setRadioNow("Tuning…", freq, radioDemod);
+});
+
+document.getElementById("btn-stop-radio").addEventListener("click", (e) => {
+  flashClick(e.currentTarget, "stop (radio)");
+  socket.emit("stop");
+  stopRadioPlayback();
+});
+
+socket.on("radio_started", (msg) => {
+  radioRate = msg.sample_rate || 50000;
+  if (radioNode) radioNode.port.postMessage({ type: "rate", rate: radioRate });
+  setRadioNow("Playing", msg.freq_mhz, msg.demod);
+});
+
+socket.on("radio_audio", (data) => {
+  if (!radioNode || !radioPlaying) return;
+  let ab = null;
+  if (data instanceof ArrayBuffer) ab = data;
+  else if (ArrayBuffer.isView(data)) ab = data.buffer;
+  if (!ab) return;
+  const i16 = new Int16Array(ab);
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+  radioNode.port.postMessage(f32, [f32.buffer]);
+});
 
 // initial
 setMode("sweep");

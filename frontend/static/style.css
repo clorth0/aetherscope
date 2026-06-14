@@ -917,3 +917,86 @@ canvas {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* ------------------------------------------------------------------ */
+/* Radio (AM/FM) mode                                                 */
+/* ------------------------------------------------------------------ */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.seg-btn {
+  appearance: none;
+  border: none;
+  background: var(--bg-2);
+  color: var(--fg-dim);
+  padding: 6px 18px;
+  font: inherit;
+  cursor: pointer;
+}
+.seg-btn + .seg-btn { border-left: 1px solid var(--border-strong); }
+.seg-btn:hover { color: var(--fg); }
+.seg-btn.active {
+  background: var(--accent);
+  color: var(--bg-0);
+  font-weight: 600;
+}
+
+.freq-tune {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.freq-tune input { flex: 1; text-align: center; }
+.step-btn {
+  appearance: none;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--fg);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.step-btn:hover { border-color: var(--accent); color: var(--accent-strong); }
+
+.radio-now {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  text-align: center;
+  padding: 40px 20px;
+}
+.radio-now-state {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.radio-now-state.live { color: var(--accent-strong); }
+.radio-now-state.live::before {
+  content: "● ";
+  color: var(--accent);
+  animation: radio-pulse 1.4s ease-in-out infinite;
+}
+@keyframes radio-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.radio-now-freq {
+  font-size: 56px;
+  font-weight: 700;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.radio-now-demod {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+}
+.radio-now .hint { max-width: 420px; margin-top: 12px; }
