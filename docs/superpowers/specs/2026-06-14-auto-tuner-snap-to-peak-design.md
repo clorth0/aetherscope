@@ -54,13 +54,33 @@ without a lock.
 - Valid only in `radio` mode (not the scanner, not other jobs); otherwise an
   error toast.
 - `iq = recv.latest_iq()`; if `None`, info toast "no samples yet."
-- `search_hz` by mode: FM 100 kHz, AM/NFM 25 kHz (narrow channels must not jump).
+- `search_hz` by mode: FM 50 kHz, AM/NFM 15 kHz. Snap **fine-centers the station
+  you are on**, it does not seek nearby ones (seek is out of scope). The window
+  stays well inside the channel spacing so a stronger neighbor, or its
+  modulation skirt, cannot win. See "Hardware findings" below.
 - `offset = find_peak_offset(iq, cfg.sample_rate_hz, search_hz=search_hz)`.
-- `|offset| < 500 Hz` -> info toast "already on the strongest signal."
+- `|offset| < 500 Hz` -> info toast "no stronger signal to snap to."
 - Otherwise `new = round(cfg.freq_mhz + offset/1e6, 4)`, restart via
   `_start_radio(replace(cfg, freq_mhz=new))`, success toast
   "Snapped to <new> MHz (<+/-kHz>)." The existing `radio_started` event updates
   the displayed frequency, so no extra client state is needed.
+
+## Hardware findings (HackRF, FM broadcast band)
+
+Validated against live FM with the HackRF, which reshaped the search widths:
+
+- A wide (+-100 kHz) FM window mis-snaps when tuned roughly between two stations:
+  from 101.05 MHz it locked onto 100.952 MHz, the upper modulation skirt of the
+  strong 100.9 station whose carrier sat just outside the window, instead of the
+  real in-window 101.1 carrier. Narrowing FM to +-50 kHz fixes this: the same
+  101.05 tune now no-ops (nothing clean in range) rather than grabbing a skirt,
+  while a tune near a station (101.13) still centers it.
+- Raw max-bin is stable across repeated captures and window widths. A smoothed
+  PSD peak was tried and was *less* stable (it chased a neighbor's broad lump),
+  so smoothing was dropped (YAGNI).
+- Wideband FM is offset-tolerant and its averaged energy peak can sit ~20 kHz off
+  the carrier, so FM snap is a harmless "good enough" centering. The feature is
+  most precise for AM/NFM, whose discrete carrier is exactly the peak.
 
 ### Front end
 

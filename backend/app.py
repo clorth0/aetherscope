@@ -739,12 +739,14 @@ def on_snap_radio():
     if iq is None:
         _emit_toast("info", "No samples yet, try snapping again in a moment.")
         return
-    # Narrow demods sit on tight channels; keep the search from crossing into
-    # an adjacent one. Wideband FM stations are 200 kHz apart, so 100 kHz is safe.
-    search_hz = 100_000.0 if cfg.demod == "fm" else 25_000.0
+    # Snap fine-centers the station you are on, it does not seek nearby ones.
+    # Keep the search well inside the channel spacing so a stronger neighbor (or
+    # its modulation skirt) cannot win: FM channels are 200 kHz apart, narrow
+    # AM/NFM channels much tighter.
+    search_hz = 50_000.0 if cfg.demod == "fm" else 15_000.0
     offset = find_peak_offset(iq, cfg.sample_rate_hz, search_hz=search_hz)
     if abs(offset) < 500.0:
-        _emit_toast("info", f"Already on the strongest signal near {cfg.freq_mhz:.3f} MHz.")
+        _emit_toast("info", f"No stronger signal to snap to near {cfg.freq_mhz:.3f} MHz.")
         return
     new_freq = round(cfg.freq_mhz + offset / 1_000_000.0, 4)
     _start_radio(replace(cfg, freq_mhz=new_freq))
