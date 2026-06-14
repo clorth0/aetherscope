@@ -1149,3 +1149,10 @@ canvas {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+#btn-scan-radio { width: 100%; margin-top: 4px; }
+#btn-scan-radio.active {
+  background: linear-gradient(180deg, #5a3a12, #382407);
+  border-color: #e0954d;
+  color: #ffd9b0;
+}

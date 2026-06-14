@@ -282,6 +282,16 @@
       </section>
 
       <section class="panel">
+        <h2>Scanner</h2>
+        <div class="row slider-row">
+          <label>Squelch <span id="radio_squelch_val" class="unit">-45 dBFS</span></label>
+          <input id="radio_squelch" type="range" value="-45" min="-60" max="-10" step="1" />
+        </div>
+        <button id="btn-scan-radio" class="btn ghost">⤬ Scan marks</button>
+        <p class="hint">Cycles your Marked Frequencies (from Sweep) in the current demod and stops on activity.</p>
+      </section>
+
+      <section class="panel">
         <h2>About</h2>
         <p class="hint">
           FM is wideband broadcast (88 to 108 MHz). AM covers airband

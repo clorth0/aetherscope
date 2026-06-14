@@ -30,7 +30,7 @@ from .adsb import AdsbConfig, AdsbReceiver
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_error, delete_capture, list_captures
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
-from .radio import AUDIO_RATE, RadioConfig, RadioReceiver
+from .radio import AUDIO_RATE, RadioConfig, RadioReceiver, RadioScanner, ScanRadioConfig
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
 from . import telemetry
@@ -107,6 +107,7 @@ _state: dict = {
     "adsb": None,
     "scanner": None,
     "radio": None,
+    "scan_radio": None,
     "sweep_config": SweepConfig(),
     "decode_config": DecodeConfig(),
     "capture_config": CaptureConfig(),
@@ -222,13 +223,13 @@ def _stop_all_locked() -> None:
     then synchronously tear down subprocesses. Caller MUST hold _state_lock.
     """
     jobs = []
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio"):
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio"):
         if _state[slot]:
             jobs.append((slot, _state[slot]))
 
     was_scanning = _state["mode"] == "scan"
 
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio"):
+    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio"):
         _state[slot] = None
     _state["mode"] = "idle"
 
@@ -400,6 +401,31 @@ def _start_radio(cfg: RadioConfig) -> bool:
         "radio_started",
         {"sample_rate": AUDIO_RATE, "freq_mhz": cfg.freq_mhz, "demod": cfg.demod},
     )
+    _emit_status()
+    return True
+
+
+def _start_scan_radio(cfg: ScanRadioConfig) -> bool:
+    if _device["info"] is None:
+        _emit_toast("error", "Cannot start: HackRF not detected.")
+        return False
+    if not cfg.freqs_mhz:
+        _emit_toast("error", "No marked frequencies to scan.")
+        return False
+    with _state_lock:
+        _stop_all_locked()
+        gen = _next_gen_locked()
+        scanner = RadioScanner(
+            cfg,
+            on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
+            on_event=lambda name, payload: socketio.emit(name, payload),
+            on_exit=_make_exit_handler("scan_radio", gen, "Scanner"),
+        )
+        _state["scan_radio"] = scanner
+        _state["mode"] = "scan_radio"
+        scanner.start()
+    socketio.emit("scan_radio_started",
+                  {"count": len(cfg.freqs_mhz), "sample_rate": AUDIO_RATE, "demod": cfg.demod})
     _emit_status()
     return True
 
@@ -601,6 +627,31 @@ def on_start_radio(data):
         _emit_toast("error", "Frequency out of range (1-6000 MHz)")
         return
     _start_radio(cfg)
+
+
+@socketio.on("start_scan_radio")
+def on_start_scan_radio(data):
+    data = data or {}
+    demod = data.get("demod", "nfm")
+    if demod not in ("fm", "nfm", "am"):
+        _emit_toast("error", "Invalid demod (use fm, nfm, or am)")
+        return
+    freqs = []
+    for f in (data.get("freqs") or []):
+        try:
+            mhz = float(f)
+        except (TypeError, ValueError):
+            continue
+        if 1.0 <= mhz <= 6000.0:
+            freqs.append(mhz)
+    if not freqs:
+        _emit_toast("error", "No valid frequencies to scan")
+        return
+    try:
+        squelch = float(data.get("squelch_dbfs", -45.0))
+    except (TypeError, ValueError):
+        squelch = -45.0
+    _start_scan_radio(ScanRadioConfig(freqs_mhz=freqs, demod=demod, squelch_dbfs=squelch))
 
 
 @socketio.on("start_scan")

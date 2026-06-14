@@ -466,8 +466,14 @@ function refreshStatusUI() {
   else if (serverMode === "capture") statusText.textContent = "Recording";
   else if (serverMode === "adsb") statusText.textContent = "Tracking";
   else if (serverMode === "scan") statusText.textContent = "Auto-Scanning";
+  else if (serverMode === "scan_radio") statusText.textContent = "Scanning";
   else statusText.textContent = "Idle";
   if (serverMode !== "sweep") sweepRateEl.textContent = "0.0 Hz";
+  const scanBtn = document.getElementById("btn-scan-radio");
+  if (scanBtn) {
+    scanBtn.textContent = serverMode === "scan_radio" ? "■ Stop scan" : "⤬ Scan marks";
+    scanBtn.classList.toggle("active", serverMode === "scan_radio");
+  }
 
   // Light up the tab whose mode is actually running, even when the user
   // is viewing a different tab.
@@ -569,6 +575,7 @@ function onServerLeftMode(prevMode) {
   if (prevMode === "sweep")   clearSweepVisuals();
   if (prevMode === "adsb")    clearAdsbVisuals();
   if (prevMode === "radio")   stopRadioPlayback();
+  if (prevMode === "scan_radio") stopRadioPlayback();
   // capture/scan have their own dedicated "done" / "stopped" events
 }
 
@@ -1634,7 +1641,7 @@ function setRadioNow(state, freq, demod) {
   const s = document.getElementById("radio-now-state");
   const f = document.getElementById("radio-now-freq");
   const d = document.getElementById("radio-now-demod");
-  if (s) { s.textContent = state; s.classList.toggle("live", state === "Playing"); }
+  if (s) { s.textContent = state; s.classList.toggle("live", state === "Playing" || state === "Holding"); }
   if (f) f.textContent = (freq != null) ? `${parseFloat(freq).toFixed(1)} MHz` : "—";
   if (d) d.textContent = demod ? demod.toUpperCase() : "";
 }
@@ -1735,6 +1742,44 @@ document.getElementById("btn-stop-radio").addEventListener("click", (e) => {
   socket.emit("stop");
   stopRadioPlayback();
 });
+
+// ---- Scanner: cycle the marked frequencies, stop on activity ----
+let scanSquelch = -45;
+const radioSquelchEl = document.getElementById("radio_squelch");
+if (radioSquelchEl) {
+  radioSquelchEl.addEventListener("input", () => {
+    scanSquelch = parseInt(radioSquelchEl.value, 10);
+    const v = document.getElementById("radio_squelch_val");
+    if (v) v.textContent = `${scanSquelch} dBFS`;
+    updateSliderFills(["radio_squelch"]);
+  });
+  updateSliderFills(["radio_squelch"]);
+}
+
+document.getElementById("btn-scan-radio").addEventListener("click", async (e) => {
+  flashClick(e.currentTarget, "scan_radio");
+  if (serverMode === "scan_radio") { socket.emit("stop"); stopRadioPlayback(); return; }
+  const freqs = marks.map(m => m.hz / 1e6);
+  if (!freqs.length) return;   // backend also guards with a toast
+  try {
+    await ensureRadioAudio();
+  } catch (err) {
+    console.error("[aetherscope] audio init failed", err);
+    return;
+  }
+  radioNode.port.postMessage({ type: "flush" });
+  radioPlaying = true;
+  socket.emit("start_scan_radio", { freqs, demod: radioDemod, squelch_dbfs: scanSquelch });
+  setRadioNow("Scanning", null, radioDemod);
+});
+
+socket.on("scan_radio_started", (msg) => {
+  if (msg && msg.sample_rate && radioNode) radioNode.port.postMessage({ type: "rate", rate: msg.sample_rate });
+  radioPlaying = true;
+});
+socket.on("scan_pos", (msg) => { if (msg) setRadioNow("Scanning", msg.freq_mhz, radioDemod); });
+socket.on("scan_hold", (msg) => { if (msg) setRadioNow("Holding", msg.freq_mhz, radioDemod); });
+socket.on("scan_resume", () => setRadioNow("Scanning", null, radioDemod));
 
 socket.on("radio_started", (msg) => {
   radioRate = msg.sample_rate || 50000;

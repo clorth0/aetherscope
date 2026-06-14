@@ -19,7 +19,7 @@ import logging
 import shutil
 import subprocess
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
@@ -263,3 +263,140 @@ class RadioReceiver:
                 self.on_exit(reason)
             except Exception:
                 log.exception("on_exit callback failed")
+
+
+@dataclass
+class ScanRadioConfig:
+    freqs_mhz: list = field(default_factory=list)  # frequencies to cycle (MHz)
+    demod: str = "nfm"
+    squelch_dbfs: float = -45.0   # hold + play when channel power exceeds this
+    lna_gain: int = 16
+    vga_gain: int = 20
+    amp_enable: bool = False
+    sample_rate_hz: int = FS_IN
+
+
+ScanEventCallback = Callable[[str, dict], None]
+_HANG_S = 1.5  # keep listening this long after the signal drops below squelch
+
+
+class RadioScanner:
+    """Cycle a list of frequencies; when channel power exceeds the squelch,
+    hold and stream audio until it drops, then resume. Retuning means
+    respawning hackrf_transfer, so the cycle runs at roughly a couple of
+    channels per second.
+    """
+
+    def __init__(self, config: ScanRadioConfig, on_audio, on_event, on_exit=None):
+        self.config = config
+        self.on_audio = on_audio
+        self.on_event = on_event
+        self.on_exit = on_exit
+        self._proc: subprocess.Popen | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._kill()
+
+    def is_running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def _kill(self) -> None:
+        if self._proc and self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+        self._proc = None
+
+    def _spawn(self, freq_hz: int) -> None:
+        c = self.config
+        cmd = [
+            HACKRF_TRANSFER, "-r", "-", "-f", str(freq_hz),
+            "-s", str(c.sample_rate_hz), "-b", "1750000",
+            "-l", str(c.lna_gain), "-g", str(c.vga_gain),
+        ]
+        if c.amp_enable:
+            cmd += ["-a", "1"]
+        self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if self._proc.stderr is not None:
+            telemetry.watch_stderr("scan", self._proc.stderr)
+
+    def _read_block(self) -> np.ndarray | None:
+        assert self._proc is not None and self._proc.stdout is not None
+        buf = self._proc.stdout.read(BLOCK_SAMPLES * 2)
+        if not buf:
+            return None
+        raw = np.frombuffer(buf, dtype=np.int8)
+        n = (len(raw) // 2) * 2
+        if n < 2:
+            return None
+        raw = raw[:n].astype(np.float32) / 128.0
+        return (raw[0::2] + 1j * raw[1::2]).astype(np.complex64)
+
+    def _run(self) -> None:
+        c = self.config
+        freqs = list(c.freqs_mhz)
+        if not freqs:
+            if self.on_exit:
+                self.on_exit("died")
+            return
+        block_dur = BLOCK_SAMPLES / FS_IN
+        i = 0
+        try:
+            while not self._stop.is_set():
+                f = freqs[i % len(freqs)]
+                try:
+                    self._spawn(int(f * 1_000_000))
+                except FileNotFoundError:
+                    log.error("hackrf_transfer not found at %s", HACKRF_TRANSFER)
+                    break
+
+                # Discard warmup blocks: the first ~0.2 s after a retune is a
+                # device/USB settling transient that reads as false signal.
+                warm = self._read_block()
+                warm = self._read_block() if warm is not None else None
+                iq = self._read_block() if warm is not None else None
+                if iq is None:
+                    self._kill()
+                    i += 1
+                    continue
+                sig = signal_dbfs(iq)
+                self.on_event("scan_pos", {"freq_mhz": f, "dbfs": sig, "index": i % len(freqs)})
+
+                if sig >= c.squelch_dbfs:
+                    self.on_event("scan_hold", {"freq_mhz": f, "dbfs": sig})
+                    state = make_state(c.demod)
+                    try:
+                        self.on_audio(demodulate(iq, c.demod, state).tobytes())
+                        below = 0.0
+                        while not self._stop.is_set():
+                            iq = self._read_block()
+                            if iq is None:
+                                break
+                            sig = signal_dbfs(iq)
+                            self.on_audio(demodulate(iq, c.demod, state).tobytes())
+                            below = below + block_dur if sig < c.squelch_dbfs else 0.0
+                            if below >= _HANG_S:
+                                break
+                    except Exception:
+                        log.exception("scan listen failed")
+                    self.on_event("scan_resume", {"freq_mhz": f})
+
+                self._kill()
+                i += 1
+        finally:
+            self._kill()
+            log.info("radio scanner exiting")
+            if self.on_exit:
+                self.on_exit("stopped" if self._stop.is_set() else "died")
