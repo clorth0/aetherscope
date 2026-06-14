@@ -41,6 +41,8 @@ let maxHoldOn    = false;
 let avgOn        = false;
 let maxHoldPowers = null;   // Float32Array, per-bin peak hold
 let avgPowers     = null;   // Float32Array, per-bin exponential average
+let lastPeaks     = [];     // most recent detected peaks
+let lastPeakRender = 0;     // throttle timestamp
 let cursorX      = -1;
 let sweepTimestamps = [];
 let events       = [];
@@ -568,6 +570,69 @@ function clearAdsbVisuals() {
   if (currentMode === "adsb") renderAircraftList();
 }
 
+// Peak detection mirrors the Auto-Scan approach: median noise floor, a
+// threshold above it, then group adjacent above-threshold bins into peaks.
+function findPeaks(powers, f0, f1, thresholdDb = 10, maxPeaks = 12) {
+  const n = powers.length;
+  if (!n) return [];
+  const floor = Array.prototype.slice.call(powers).sort((a, b) => a - b)[Math.floor(n / 2)];
+  const thr = floor + thresholdDb;
+  const groups = [];
+  for (let i = 0; i < n; i++) {
+    if (powers[i] <= thr) continue;
+    const f = f0 + (i / (n - 1)) * (f1 - f0);
+    const last = groups[groups.length - 1];
+    if (last && i - last._i <= 2) {
+      if (powers[i] > last.power) { last.power = powers[i]; last.hz = f; }
+      last._i = i;
+    } else {
+      groups.push({ hz: f, power: powers[i], _i: i });
+    }
+  }
+  for (const g of groups) g.snr = g.power - floor;
+  groups.sort((a, b) => b.power - a.power);
+  return groups.slice(0, maxPeaks);
+}
+
+function updatePeaks() {
+  if (!lastSweep) return;
+  lastPeaks = findPeaks(lastSweep.powers, lastSweep.f0, lastSweep.f1);
+  renderPeakTable(lastPeaks);
+}
+
+function renderPeakTable(peaks) {
+  const el = document.getElementById("peaks-list");
+  if (!el) return;
+  el.replaceChildren();
+  if (!peaks.length) {
+    const empty = document.createElement("div");
+    empty.className = "event-empty";
+    empty.textContent = "No peaks above the noise floor.";
+    el.appendChild(empty);
+    return;
+  }
+  peaks.forEach((p) => {
+    const row = document.createElement("div");
+    row.className = "peak-row";
+    const f = document.createElement("span");
+    f.className = "peak-freq";
+    f.textContent = fmtFreq(p.hz);
+    const lvl = document.createElement("span");
+    lvl.className = "peak-lvl";
+    lvl.textContent = `${p.power.toFixed(0)} dBFS · +${p.snr.toFixed(0)}`;
+    const mk = document.createElement("button");
+    mk.className = "btn ghost small";
+    mk.textContent = "Mark";
+    mk.addEventListener("click", () => addMark(p.hz));
+    row.append(f, lvl, mk);
+    el.appendChild(row);
+  });
+}
+
+document.getElementById("btn-mark-peak").addEventListener("click", () => {
+  if (lastPeaks.length) addMark(lastPeaks[0].hz);
+});
+
 function updateHoldTraces(p) {
   if (maxHoldOn) {
     if (!maxHoldPowers || maxHoldPowers.length !== p.length) maxHoldPowers = Float32Array.from(p);
@@ -611,6 +676,8 @@ socket.on("sweep", (msg) => {
   if (currentMode === "sweep") {
     drawFFT(msg.powers);
     pushWaterfallRow(msg.powers);
+    const nowp = performance.now();
+    if (nowp - lastPeakRender > 400) { lastPeakRender = nowp; updatePeaks(); }
   }
   // Prefer the backend's true rate (it counts every sweep before
   // rate-limiting); fall back to local timestamps if absent.
@@ -740,6 +807,8 @@ function clearSweepVisuals() {
   lastSweep = null;
   maxHoldPowers = null;
   avgPowers = null;
+  lastPeaks = [];
+  renderPeakTable([]);
   const fr = fftCanvas.getBoundingClientRect();
   fftCtx.clearRect(0, 0, fr.width, fr.height);
   const wr = waterfallCanvas.getBoundingClientRect();
@@ -858,7 +927,14 @@ function freqAtCursor(e) {
 }
 function addMark(hz) {
   if (marks.some(m => Math.abs(m.hz - hz) < 50_000)) return; // dedupe within 50 kHz
-  marks.push({ hz });
+  let power = null;
+  if (lastSweep) {
+    const n = lastSweep.powers.length;
+    const idx = Math.max(0, Math.min(n - 1,
+      Math.round((hz - lastSweep.f0) / (lastSweep.f1 - lastSweep.f0) * (n - 1))));
+    power = lastSweep.powers[idx];
+  }
+  marks.push({ hz, power });
   marks.sort((a, b) => a.hz - b.hz);
   saveMarks();
   renderMarks();
@@ -873,8 +949,22 @@ waterfallCanvas.addEventListener("click", onSpectrumClick);
 
 function renderMarks() {
   const el = document.getElementById("marks-list");
+  const deltaEl = document.getElementById("marks-delta");
   if (!el) return;
   el.replaceChildren();
+  if (deltaEl) {
+    if (marks.length >= 2) {
+      const hzs = marks.map(m => m.hz);
+      const span = (Math.max(...hzs) - Math.min(...hzs)) / 1e6;
+      const pows = marks.map(m => m.power).filter(p => p != null);
+      let txt = `Span Δf ${span.toFixed(3)} MHz`;
+      if (pows.length >= 2) txt += `  ·  ΔdB ${(Math.max(...pows) - Math.min(...pows)).toFixed(0)}`;
+      deltaEl.textContent = txt;
+      deltaEl.hidden = false;
+    } else {
+      deltaEl.hidden = true;
+    }
+  }
   if (!marks.length) {
     const empty = document.createElement("div");
     empty.className = "event-empty";
@@ -888,7 +978,7 @@ function renderMarks() {
 
     const freq = document.createElement("span");
     freq.className = "mark-freq";
-    freq.textContent = fmtFreq(m.hz);
+    freq.textContent = (m.power != null) ? `${fmtFreq(m.hz)}  ${m.power.toFixed(0)} dB` : fmtFreq(m.hz);
 
     const tune = document.createElement("button");
     tune.className = "btn ghost small";

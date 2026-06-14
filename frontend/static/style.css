@@ -1096,3 +1096,23 @@ canvas {
 .trace-btn.active { color: var(--bg-0); background: var(--accent); border-color: var(--accent); }
 #btn-maxhold.active { background: #e0954d; border-color: #e0954d; }   /* amber, matches trace */
 #btn-avg.active     { background: #a078ff; border-color: #a078ff; }   /* violet, matches trace */
+
+/* Live peak table + marker delta */
+.peaks-list { display: flex; flex-direction: column; gap: 3px; }
+.peak-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.peak-freq { flex: 1; color: var(--fg); }
+.peak-lvl { color: var(--fg-dim); font-size: 12px; }
+.marks-delta {
+  font-size: 12px;
+  color: var(--accent-strong);
+  font-variant-numeric: tabular-nums;
+  padding: 2px 0 6px;
+}
+#btn-mark-peak { margin-bottom: 6px; }
