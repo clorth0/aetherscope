@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Iterable, Iterator
 
 import numpy as np
 
@@ -32,6 +32,54 @@ class SweepConfig:
 
 SweepCallback = Callable[[np.ndarray, np.ndarray], None]
 ExitCallback  = Callable[[str], None]   # reason: "stopped" | "died"
+
+
+def _to_arrays(acc: dict[int, float]) -> tuple[np.ndarray, np.ndarray]:
+    freqs = np.fromiter(sorted(acc.keys()), dtype=np.float64)
+    powers = np.fromiter(
+        (acc[int(f)] for f in freqs), dtype=np.float32, count=len(freqs)
+    )
+    return freqs, powers
+
+
+def assemble_sweeps(lines: Iterable[str]) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """Parse hackrf_sweep CSV output, yielding one (freqs, powers) pair per
+    complete sweep cycle.
+
+    hackrf_sweep emits each tuning segment of a sweep once, in a NON-monotonic
+    order, and repeats the identical segment set every cycle. We key power by
+    absolute frequency in a dict (which dedupes and lets us sort), and flush a
+    full row when the first segment we saw recurs -- that marks the start of
+    the next cycle. The final, still-incomplete cycle is not flushed.
+
+    The previous implementation flushed whenever hz_low decreased, which
+    assumed ascending segment order; against the real out-of-order stream it
+    fired hundreds of partial rows per second instead of one full row per
+    sweep, so the UI never received a coherent spectrum.
+    """
+    accumulators: dict[int, float] = {}
+    cycle_start_hz: int | None = None
+
+    for line in lines:
+        parts = line.strip().split(", ")
+        if len(parts) < 7:
+            continue
+        try:
+            hz_low = int(parts[2])
+            bin_width = float(parts[4])
+            powers = [float(x) for x in parts[6:]]
+        except (ValueError, IndexError):
+            continue
+
+        if cycle_start_hz is None:
+            cycle_start_hz = hz_low
+        elif hz_low == cycle_start_hz and accumulators:
+            yield _to_arrays(accumulators)
+            accumulators = {}
+
+        for i, p in enumerate(powers):
+            f = int(hz_low + i * bin_width)
+            accumulators[f] = p
 
 
 class SweepStreamer:
@@ -94,33 +142,22 @@ class SweepStreamer:
             log.error("hackrf_sweep binary not found at %s", HACKRF_SWEEP)
             return
 
-        accumulators: dict[int, float] = {}
-        last_hz_low = -1
-
         assert self._proc.stdout is not None
-        for line in self._proc.stdout:
+
+        def stop_aware_lines() -> Iterator[str]:
+            for line in self._proc.stdout:  # type: ignore[union-attr]
+                if self._stop.is_set():
+                    return
+                yield line
+
+        for freqs, powers in assemble_sweeps(stop_aware_lines()):
             if self._stop.is_set():
                 break
-            parts = line.strip().split(", ")
-            if len(parts) < 7:
-                continue
-            try:
-                hz_low = int(parts[2])
-                bin_width = float(parts[4])
-                powers = [float(x) for x in parts[6:]]
-            except (ValueError, IndexError):
-                continue
-
-            # New sweep when hz_low resets to the start of the range
-            if hz_low < last_hz_low and accumulators:
-                self._emit(accumulators)
-                accumulators = {}
-            last_hz_low = hz_low
-
-            for i, p in enumerate(powers):
-                f = int(hz_low + i * bin_width)
-                accumulators[f] = p
             self._got_data = True
+            try:
+                self.on_sweep(freqs, powers)
+            except Exception:
+                log.exception("on_sweep callback failed")
 
         log.info("sweep streamer exiting")
         if self.on_exit:
@@ -130,10 +167,3 @@ class SweepStreamer:
             except Exception:
                 log.exception("on_exit callback failed")
 
-    def _emit(self, accumulators: dict[int, float]) -> None:
-        freqs = np.fromiter(sorted(accumulators.keys()), dtype=np.float64)
-        powers = np.fromiter((accumulators[int(f)] for f in freqs), dtype=np.float32, count=len(freqs))
-        try:
-            self.on_sweep(freqs, powers)
-        except Exception:
-            log.exception("on_sweep callback failed")
