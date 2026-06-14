@@ -29,10 +29,10 @@ Content-Security-Policy, so the app shell works fully offline.
 
 ## Layout
 
-- `backend/` — Flask app (`app.py`), per-mode subprocess wrappers
+- `backend/`: Flask app (`app.py`), per-mode subprocess wrappers
   (`sdr.py`, `radio.py`, `decoders.py`, `adsb.py`, `capture.py`, `scan.py`),
   offline `replay.py`, `telemetry.py`, `device.py`.
-- `frontend/` — `templates/index.html`, `static/` (canvas/UI JS, AudioWorklet,
+- `frontend/`: `templates/index.html`, `static/` (canvas/UI JS, AudioWorklet,
   CSS, vendored deps).
-- `deploy/` — installers, launchd template, `restart.sh`, `Caddyfile.example`.
-- `tests/` — synthetic, hardware-free unit tests (run with `uv run python tests/test_*.py`).
+- `deploy/`: installers, launchd template, `restart.sh`, `Caddyfile.example`.
+- `tests/`: synthetic, hardware-free unit tests (run with `uv run python tests/test_*.py`).
