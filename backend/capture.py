@@ -43,6 +43,22 @@ class CaptureConfig:
     label: str = ""
 
 
+CAPTURE_MAX_DURATION_S = 600.0
+
+
+def capture_config_error(cfg: "CaptureConfig") -> str | None:
+    """Return a human-readable error if the capture config is out of bounds,
+    else None. Guards against accidental disk-fillers and invalid HackRF params.
+    """
+    if not (0.1 <= cfg.duration_s <= CAPTURE_MAX_DURATION_S):
+        return f"Duration must be 0.1 to {int(CAPTURE_MAX_DURATION_S)} seconds"
+    if not (2_000_000 <= cfg.sample_rate <= 20_000_000):
+        return "Sample rate must be 2 to 20 MSPS"
+    if not (1_000_000 <= cfg.freq_hz <= 6_000_000_000):
+        return "Frequency must be 1 MHz to 6 GHz"
+    return None
+
+
 @dataclass
 class CaptureRecord:
     """Metadata for one capture (also written as sidecar JSON)."""

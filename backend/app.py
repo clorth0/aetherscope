@@ -27,7 +27,7 @@ from flask import Flask, jsonify, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 
 from .adsb import AdsbConfig, AdsbReceiver
-from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, delete_capture, list_captures
+from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_error, delete_capture, list_captures
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
 from .radio import AUDIO_RATE, RadioConfig, RadioReceiver
@@ -438,6 +438,13 @@ _SENTINEL = object()
 def _device_poller() -> None:
     last_serial: object = _SENTINEL
     while True:
+        with _state_lock:
+            busy = _state["mode"] != "idle"
+        if busy:
+            # A job owns the HackRF; skip the probe so hackrf_info doesn't
+            # contend with the running subprocess. Assume the device is present.
+            time.sleep(DEVICE_POLL_INTERVAL)
+            continue
         try:
             info = probe_hackrf()
         except Exception:
@@ -544,6 +551,10 @@ def on_start_capture(data):
         cfg = CaptureConfig(**_filter_payload(data, CaptureConfig))
     except (TypeError, ValueError) as e:
         _emit_toast("error", f"Invalid capture config: {e}")
+        return
+    err = capture_config_error(cfg)
+    if err:
+        _emit_toast("error", err)
         return
     _start_capture(cfg)
 
