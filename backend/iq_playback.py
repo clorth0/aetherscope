@@ -35,7 +35,9 @@ def shift_and_resample(iq, capture_rate, offset_hz, out_rate=FS_IN, start_sample
         return iq.astype(np.complex64)
     if offset_hz:
         n = np.arange(len(iq), dtype=np.float64) + start_sample
-        iq = iq * np.exp(-2j * np.pi * (offset_hz / capture_rate) * n).astype(np.complex64)
+        # Keep the oscillator in complex128; cast the product (not the exp) so we
+        # don't lose mixer precision over long files.
+        iq = (iq * np.exp(-2j * np.pi * (offset_hz / capture_rate) * n)).astype(np.complex64)
     g = gcd(int(out_rate), int(capture_rate))
     up = int(out_rate) // g
     down = int(capture_rate) // g
@@ -94,7 +96,8 @@ class IqAudioPlayer:
                     except Exception:
                         log.exception("playback demod failed")
                         continue
-                    self.on_audio(pcm.tobytes())
+                    if len(pcm):
+                        self.on_audio(pcm.tobytes())
                     # Clock-based pacing: only sleep the slack between audio time
                     # and wall time, so processing cost does not add latency.
                     audio_s += len(pcm) / AUDIO_RATE

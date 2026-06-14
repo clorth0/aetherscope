@@ -76,7 +76,10 @@ app.secret_key = os.environ.get("AETHERSCOPE_SECRET_KEY") or secrets.token_hex(3
 # exact origins the browser uses, e.g. "https://aetherscope.example.com".
 _allowed_origins = [
     o.strip() for o in os.environ.get("AETHERSCOPE_ALLOWED_ORIGINS", "").split(",") if o.strip()
-]
+] or None
+# When unset, `None` makes engine.io enforce the request's own origin (same-origin
+# only). An empty list would instead DISABLE the origin check, letting any page in
+# the browser drive the SDR over the websocket, so default to None.
 socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=_allowed_origins)
 
 # Server-startup timestamp used to bust browser caches whenever the
@@ -106,7 +109,7 @@ def _response_headers(resp):
         "img-src 'self' data: https://*.basemaps.cartocdn.com; "
         "connect-src 'self'; "
         "worker-src 'self' blob:; "
-        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
     )
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Referrer-Policy"] = "no-referrer"
@@ -863,9 +866,10 @@ def on_connect():
     emit("status", snapshot)
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
     emit("gps_status", _gps.position())
+    _rec = _audio_rec["record"]   # one read; another thread may finalize between reads
     emit("audio_record_status", {
         "recording": _audio_rec["recorder"] is not None,
-        "name": _audio_rec["record"].name if _audio_rec["record"] else None,
+        "name": _rec.name if _rec else None,
     })
     emit("contacts", {"data": get_store().list_contacts()})
     emit("captures", {"items": _enriched_captures()})
@@ -907,7 +911,11 @@ def on_start_capture(data):
     if err:
         _emit_toast("error", err)
         return
-    _start_capture(cfg)
+    try:
+        _start_capture(cfg)
+    except Exception:
+        log.exception("start_capture failed")
+        _emit_toast("error", "Could not start capture")
 
 
 @socketio.on("start_adsb")
@@ -1260,6 +1268,16 @@ def on_start_audio_record(data):
         _emit_toast("error", "Could not start recording.")
         return
     with _state_lock:
+        if _audio_rec["recorder"] is not None:
+            # A concurrent start_audio_record won the race; discard ours so we
+            # don't orphan a half-written WAV.
+            try:
+                rec.close()
+                delete_capture(record.name)
+            except Exception:
+                log.exception("cleanup of raced recording failed")
+            _emit_audio_record_status()
+            return
         _audio_rec["recorder"] = rec
         _audio_rec["record"] = record
     _emit_audio_record_status()

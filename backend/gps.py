@@ -24,7 +24,8 @@ from typing import Callable
 log = logging.getLogger(__name__)
 
 GPSD_HOST = os.environ.get("AETHERSCOPE_GPSD_HOST", "127.0.0.1")
-GPSD_PORT = int(os.environ.get("AETHERSCOPE_GPSD_PORT", "2947"))
+_gpsd_port_env = os.environ.get("AETHERSCOPE_GPSD_PORT", "2947")
+GPSD_PORT = int(_gpsd_port_env) if _gpsd_port_env.isdigit() else 2947
 
 STALE_AFTER_S = 5.0          # no TPV within this many seconds -> position is stale
 _MAX_LINE = 65536            # ignore absurdly long lines (malformed/hostile)

@@ -37,11 +37,13 @@ def build_sigmf_meta(record: dict) -> dict:
     g = {
         "core:datatype": SIGMF_DATATYPE,
         "core:version": SIGMF_VERSION,
-        "core:sample_rate": float(record.get("sample_rate") or 0),
         "core:hw": "HackRF One",
         "core:recorder": "Aetherscope",
         "core:dataset": record.get("name", ""),   # NCD: the .iq sample file
     }
+    sr = record.get("sample_rate")
+    if sr:   # required + positive in SigMF; omit rather than emit 0
+        g["core:sample_rate"] = float(sr)
     label = record.get("label")
     if label:
         g["core:description"] = label

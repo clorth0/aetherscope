@@ -446,7 +446,9 @@ function renderEvents() {
     const time = fmtTime(ev.time);
     const model = ev.model || "unknown";
     const fields = summarizeFields(ev);
-    const rssi = ev.rssi_db != null ? `${ev.rssi_db.toFixed(0)} dB` : (ev.rssi != null ? `${ev.rssi}` : "");
+    const rssi = typeof ev.rssi_db === "number"
+      ? `${ev.rssi_db.toFixed(0)} dB`
+      : (ev.rssi != null ? escapeHtml(String(ev.rssi)) : "");   // RF-derived: escape
     return `<div class="event-row">
       <span class="event-time">${time}</span>
       <span><span class="event-model">${escapeHtml(model)}</span> <span class="event-fields">${fields}</span></span>
@@ -1531,7 +1533,7 @@ function acColor(hex) {
 }
 
 function planeIcon(track, color) {
-  const angle = (track || 0).toFixed(0);
+  const angle = (Number.isFinite(Number(track)) ? Number(track) : 0).toFixed(0);
   const c = color || "#4dd0e1";
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
@@ -1918,9 +1920,9 @@ function renderScanResults(isFinal, findings, summary) {
       : peaks.map(p => `
         <div class="peak-row">
           <span class="freq">${fmtFreqHz(p.center_hz)}</span>
-          <span class="band">${p.band}${p.decoder_hint ? ` <span class="hint-dec">→ ${p.decoder_hint}</span>` : ""}</span>
-          <span class="snr">${p.snr_db.toFixed(1)} dB</span>
-          <span class="snr">${(p.peak_db).toFixed(1)} dBFS</span>
+          <span class="band">${escapeHtml(p.band || "")}${p.decoder_hint ? ` <span class="hint-dec">→ ${escapeHtml(p.decoder_hint)}</span>` : ""}</span>
+          <span class="snr">${typeof p.snr_db === "number" ? p.snr_db.toFixed(1) : "—"} dB</span>
+          <span class="snr">${typeof p.peak_db === "number" ? p.peak_db.toFixed(1) : "—"} dBFS</span>
         </div>`).join("")
     }
   </div>`);

@@ -59,6 +59,8 @@ def capture_config_error(cfg: "CaptureConfig") -> str | None:
         return "Sample rate must be 2 to 20 MSPS"
     if not (1_000_000 <= cfg.freq_hz <= 6_000_000_000):
         return "Frequency must be 1 MHz to 6 GHz"
+    if not isinstance(cfg.label, str) or len(cfg.label) > 80:
+        return "Label must be a string of at most 80 characters"
     return None
 
 
