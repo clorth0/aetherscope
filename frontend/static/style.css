@@ -411,6 +411,26 @@ input[type="checkbox"] {
 }
 .btn.ghost { color: var(--fg-dim); }
 
+/* Disabled = not the current action (dimmed, not clickable) */
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.btn:disabled:hover { background: var(--bg-3); border-color: var(--border-strong); }
+
+/* "live" = the running job's Stop button: amber so on/off reads at a glance */
+.btn.live {
+  background: linear-gradient(180deg, #5a3a12, #382407);
+  border-color: #e0954d;
+  color: #ffd9b0;
+  box-shadow: 0 0 12px rgba(224, 149, 77, 0.35);
+}
+.btn.live:hover {
+  background: linear-gradient(180deg, #6b4616, #432b09);
+  box-shadow: 0 0 16px rgba(224, 149, 77, 0.5);
+}
+
 /* ------------------------------------------------------------------
    Main column
    ------------------------------------------------------------------ */

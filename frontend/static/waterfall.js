@@ -436,6 +436,30 @@ function refreshStatusUI() {
   document.querySelectorAll(".mode-tab").forEach(t => {
     t.classList.toggle("is-running", t.dataset.mode === serverMode);
   });
+
+  updateActionButtons();
+}
+
+// Drive Start/Stop styling from the actual running state so the lit button
+// always signals on/off: idle -> Start lit (cyan), running -> Stop lit (amber).
+const ACTION_PAIRS = [
+  ["sweep",   "btn-start-sweep",   "btn-stop-sweep"],
+  ["decode",  "btn-start-decode",  "btn-stop-decode"],
+  ["scan",    "btn-start-scan",    "btn-stop-scan"],
+  ["adsb",    "btn-start-adsb",    "btn-stop-adsb"],
+  ["radio",   "btn-start-radio",   "btn-stop-radio"],
+  ["capture", "btn-start-capture", "btn-cancel-capture"],
+];
+function updateActionButtons() {
+  for (const [mode, startId, stopId] of ACTION_PAIRS) {
+    const start = document.getElementById(startId);
+    const stop = document.getElementById(stopId);
+    if (!start || !stop) continue;
+    const live = serverMode === mode;
+    start.disabled = live;       // can't start what's already running
+    stop.disabled = !live;       // nothing to stop when idle
+    stop.classList.toggle("live", live);
+  }
 }
 
 // ------------------------------------------------------------------
