@@ -15,10 +15,15 @@
   and pauses while a job owns the HackRF so it does not contend with the running
   subprocess.
 - **DSP in numpy/scipy.** FM/NFM/AM demodulation, channel-power (`signal_dbfs`),
-  and replay FFT frames are computed in the Python process. The sweep assembler
-  rebuilds one coherent spectrum row per `hackrf_sweep` cycle.
+  snap-to-peak tuning (`tuning.py`), and replay FFT frames are computed in the
+  Python process. The sweep assembler rebuilds one coherent spectrum row per
+  `hackrf_sweep` cycle.
 - **Telemetry.** Subprocess stderr (drops/overruns) plus server counters
   (sweeps computed vs emitted, subprocess deaths) feed the Diagnostics panel.
+- **Data layer.** `store.py` is a small stdlib-`sqlite3` module (single file at
+  `AETHERSCOPE_DATA_DIR`, default `~/.local/share/aetherscope/`) holding
+  bookmarks, persisted UI settings, and capture annotations. It is thread-safe
+  (one connection, WAL, a lock) and parameterized throughout.
 
 ## Tech stack
 
@@ -31,7 +36,8 @@ Content-Security-Policy, so the app shell works fully offline.
 
 - `backend/`: Flask app (`app.py`), per-mode subprocess wrappers
   (`sdr.py`, `radio.py`, `decoders.py`, `adsb.py`, `capture.py`, `scan.py`),
-  offline `replay.py`, `telemetry.py`, `device.py`.
+  offline `replay.py`, snap-to-peak `tuning.py`, SQLite `store.py`,
+  `telemetry.py`, `device.py`.
 - `frontend/`: `templates/index.html`, `static/` (canvas/UI JS, AudioWorklet,
   CSS, vendored deps).
 - `deploy/`: installers, launchd template, `restart.sh`, `Caddyfile.example`.

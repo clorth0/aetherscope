@@ -11,5 +11,11 @@ __pycache__/
 *.wav
 captures/
 /captures/
+# SQLite data layer (default lives in ~/.local/share/aetherscope, but guard the
+# repo in case AETHERSCOPE_DATA_DIR is pointed here)
+*.db
+*.db-wal
+*.db-shm
+data/
 .idea/
 .vscode/
