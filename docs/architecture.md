@@ -35,6 +35,12 @@
   writes a companion `<base>.sigmf-meta` (SigMF 1.0.0) referencing the `.iq` via
   `core:dataset`, so recordings are portable to other SDR tools. Any geotag rides
   in `core:geolocation` (GeoJSON Point) and is scrubbed by redaction.
+- **Closing the loop.** Live radio audio can be recorded to WAV
+  (`audio_record.py`). A saved `.iq` can be listened to (`iq_playback.py`: mix an
+  offset within the band to baseband, resample to the demod rate, reuse
+  `radio.demodulate`, stream real-time audio) or decoded (`decode_file.py`:
+  resample to 1 MSps, convert cs8 to cu8, run `rtl_433 -r`). Both reuse existing
+  paths (AudioWorklet, the Decode panel) and are device-free exclusive jobs.
 
 ## Tech stack
 
@@ -49,7 +55,8 @@ Content-Security-Policy, so the app shell works fully offline.
   (`sdr.py`, `radio.py`, `decoders.py`, `adsb.py`, `capture.py`, `scan.py`),
   offline `replay.py`, snap-to-peak `tuning.py`, SQLite `store.py`,
   optional gpsd geotagging `gps.py`, SigMF export `sigmf.py`,
-  `telemetry.py`, `device.py`.
+  WAV audio recording `audio_record.py`, IQ-capture playback `iq_playback.py`
+  and file decode `decode_file.py`, `telemetry.py`, `device.py`.
 - `frontend/`: `templates/index.html`, `static/` (canvas/UI JS, AudioWorklet,
   CSS, vendored deps).
 - `deploy/`: installers, launchd template, `restart.sh`, `Caddyfile.example`.
