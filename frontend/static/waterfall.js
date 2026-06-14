@@ -107,7 +107,10 @@ function setMode(mode) {
 }
 
 document.querySelectorAll(".mode-tab").forEach(tab => {
-  tab.addEventListener("click", () => setMode(tab.dataset.mode));
+  tab.addEventListener("click", () => {
+    setMode(tab.dataset.mode);
+    socket.emit("set_setting", { key: "last_mode", value: tab.dataset.mode });
+  });
 });
 
 // ------------------------------------------------------------------
@@ -556,6 +559,9 @@ function showToast(level, message) {
   });
 }
 
+// Flag to guard against settings restore firing set_setting echoes.
+let _settingsRestored = false;
+
 socket.on("status", (s) => {
   serverMode = s.mode || "idle";
   if (s.sweep_config) applySweepConfigToInputs(s.sweep_config);
@@ -565,6 +571,22 @@ socket.on("status", (s) => {
   if (s.scan_config) applyScanConfigToInputs(s.scan_config);
   if (s.radio_config) applyRadioConfigToInputs(s.radio_config);
   if (Array.isArray(s.bookmarks)) { bookmarks = s.bookmarks; renderBookmarks(); }
+
+  // Restore persisted UI settings once on the first status event.
+  if (!_settingsRestored && s.settings) {
+    _settingsRestored = true;
+    const st = s.settings;
+    const KNOWN_MODES = ["sweep", "decode", "capture", "adsb", "scan", "radio"];
+    if (KNOWN_MODES.includes(st.last_mode)) setMode(st.last_mode);
+    if (Number.isFinite(st.last_radio_freq)) radioFreqEl.value = st.last_radio_freq;
+    if (st.last_demod) setRadioDemod(st.last_demod);
+    if (typeof st.radio_volume === "number") {
+      radioVolEl.value = st.radio_volume;
+      radioVolVal.textContent = `${st.radio_volume}%`;
+      updateSliderFills(["radio_vol"]);
+      if (radioGain) radioGain.gain.value = radioVolume();
+    }
+  }
 
   // Visible-feedback when the backend transitions out of a running mode:
   // wipe whatever the previous mode was painting so the user can SEE
@@ -1089,6 +1111,21 @@ function renderMarks() {
     tune.textContent = "Listen";
     tune.addEventListener("click", () => tuneToMark(m.hz));
 
+    const save = document.createElement("button");
+    save.className = "btn ghost small mark-save";
+    save.title = "Save as bookmark";
+    save.textContent = "★";
+    save.addEventListener("click", () => {
+      const mhz = m.hz / 1e6;
+      const label = `${mhz.toFixed(3)} MHz`;
+      socket.emit("add_bookmark", {
+        freq_hz: Math.round(m.hz),
+        demod: null,
+        label,
+        source: "mark",
+      });
+    });
+
     const del = document.createElement("button");
     del.className = "btn ghost small mark-del";
     del.title = "Remove";
@@ -1100,7 +1137,7 @@ function renderMarks() {
       if (lastSweep) drawFFT(lastSweep.powers);
     });
 
-    row.append(freq, tune, del);
+    row.append(freq, tune, save, del);
     el.appendChild(row);
   });
 }
@@ -1172,28 +1209,58 @@ function renderCaptures() {
   }
   const filtered = captures.filter(c => {
     if (!capFilter) return true;
-    const blob = `${c.name} ${c.label} ${c.freq_hz}`.toLowerCase();
+    const blob = `${c.name} ${c.label} ${c.user_label || ""} ${c.freq_hz}`.toLowerCase();
     return blob.includes(capFilter);
   });
-  capturesListEl.innerHTML = filtered.map(c => `
+  capturesListEl.innerHTML = filtered.map(c => {
+    const displayName = escapeHtml(c.user_label || c.label || c.name);
+    const tags = Array.isArray(c.tags) ? c.tags : [];
+    const tagsHtml = tags.length
+      ? tags.map(t => `<span class="bm-tag">${escapeHtml(t)}</span>`).join(" ")
+      : "";
+    const missingBadge = c.missing ? `<span class="cap-missing-badge">missing</span>` : "";
+    return `
     <div class="cap-row">
       <div class="cap-main">
-        <div class="cap-name">${escapeHtml(c.label || c.name)}</div>
+        <div class="cap-name">${displayName}${missingBadge}</div>
+        ${tagsHtml ? `<div class="cap-tags">${tagsHtml}</div>` : ""}
         <div class="cap-detail">
           ${fmtMHz(c.freq_hz)}<span class="sep">·</span>
           ${fmtMSps(c.sample_rate)}<span class="sep">·</span>
           ${c.duration_s.toFixed(1)}s<span class="sep">·</span>
           ${fmtBytes(c.file_size)}
         </div>
-        <div class="cap-meta">${c.name} · ${fmtAgo(c.started_at)} · ${c.sample_format}</div>
+        <div class="cap-meta">${escapeHtml(c.name)} · ${fmtAgo(c.started_at)} · ${escapeHtml(c.sample_format)}</div>
       </div>
       <div class="cap-actions">
         <a href="/captures/${encodeURIComponent(c.name)}" download>Download</a>
-        <button data-replay="${c.name}">Replay</button>
-        <button class="danger" data-delete="${c.name}">Delete</button>
+        <button data-edit="${escapeHtml(c.name)}">Edit</button>
+        <button data-replay="${escapeHtml(c.name)}">Replay</button>
+        <button class="danger" data-delete="${escapeHtml(c.name)}">Delete</button>
       </div>
     </div>
-  `).join("");
+  `;
+  }).join("");
+
+  capturesListEl.querySelectorAll("[data-edit]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.edit;
+      const item = captures.find(c => c.name === name);
+      const newLabel = prompt("Label:", item ? (item.user_label || item.label || "") : "");
+      if (newLabel === null) return;
+      const newNotes = prompt("Notes:", item ? (item.notes || "") : "");
+      if (newNotes === null) return;
+      const rawTags = prompt("Tags (comma-separated):", item && Array.isArray(item.tags) ? item.tags.join(", ") : "");
+      if (rawTags === null) return;
+      const tags = rawTags.split(",").map(t => t.trim()).filter(Boolean);
+      socket.emit("update_capture", {
+        filename: name,
+        user_label: newLabel.trim(),
+        notes: newNotes.trim(),
+        tags,
+      });
+    });
+  });
 
   capturesListEl.querySelectorAll("[data-delete]").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -1756,20 +1823,30 @@ function setRadioSignal(dbfs) {
 }
 
 document.querySelectorAll("#radio-demod .seg-btn").forEach(b => {
-  b.addEventListener("click", () => setRadioDemod(b.dataset.demod));
+  b.addEventListener("click", () => {
+    setRadioDemod(b.dataset.demod);
+    socket.emit("set_setting", { key: "last_demod", value: b.dataset.demod });
+  });
 });
 
 document.getElementById("radio-up").addEventListener("click", () => {
   radioFreqEl.value = (parseFloat(radioFreqEl.value || "0") + 0.1).toFixed(1);
+  socket.emit("set_setting", { key: "last_radio_freq", value: parseFloat(radioFreqEl.value) });
 });
 document.getElementById("radio-down").addEventListener("click", () => {
   radioFreqEl.value = (parseFloat(radioFreqEl.value || "0") - 0.1).toFixed(1);
+  socket.emit("set_setting", { key: "last_radio_freq", value: parseFloat(radioFreqEl.value) });
+});
+radioFreqEl.addEventListener("change", () => {
+  const v = parseFloat(radioFreqEl.value);
+  if (Number.isFinite(v)) socket.emit("set_setting", { key: "last_radio_freq", value: v });
 });
 
 radioVolEl.addEventListener("input", () => {
   radioVolVal.textContent = `${radioVolEl.value}%`;
   if (radioGain) radioGain.gain.value = radioVolume();
   updateSliderFills(["radio_vol"]);
+  socket.emit("set_setting", { key: "radio_volume", value: parseInt(radioVolEl.value, 10) });
 });
 updateSliderFills(["radio_vol"]);
 
