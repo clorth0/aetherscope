@@ -31,6 +31,7 @@
     <button class="mode-tab" data-mode="adsb"><span class="tab-running-dot"></span>ADS-B</button>
     <button class="mode-tab" data-mode="scan"><span class="tab-running-dot"></span>Auto-Scan</button>
     <button class="mode-tab" data-mode="radio"><span class="tab-running-dot"></span>Radio</button>
+    <button class="mode-tab" data-mode="inventory"><span class="tab-running-dot"></span>Inventory</button>
   </nav>
   <div class="topbar-spacer"></div>
   <div class="stat" id="stat-sweep">
@@ -509,6 +510,15 @@
           <button id="iq-play-stop" class="btn ghost">■ Stop</button>
         </div>
       </div>
+    </div>
+
+    <!-- Inventory view -->
+    <div class="view" id="view-inventory" hidden>
+      <div class="inv-toolbar">
+        <input id="inv-filter" type="text" placeholder="Filter (label, hex/id, country)…" />
+        <button id="btn-clear-inventory" class="btn ghost">Clear inventory</button>
+      </div>
+      <div id="inventory-list"></div>
     </div>
 
     <!-- Capture view -->

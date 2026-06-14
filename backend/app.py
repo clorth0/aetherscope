@@ -200,8 +200,57 @@ def _emit_sweep(freqs: np.ndarray, powers: np.ndarray) -> None:
     )
 
 
+_contact_write_ts: dict = {}     # key -> last DB write time (throttle)
+_contact_emit_ts = [0.0]         # last 'contacts' broadcast time
+_CONTACT_WRITE_DT = 2.0
+_CONTACT_EMIT_DT = 3.0
+
+
+def _emit_contacts() -> None:
+    try:
+        socketio.emit("contacts", {"data": get_store().list_contacts()})
+    except Exception:
+        log.exception("emit contacts failed")
+
+
+def _record_contact(key, kind, label, ident="", info=None, lat=None, lon=None) -> None:
+    """Throttled upsert of a contact sighting into the persistent inventory."""
+    now = time.time()
+    if now - _contact_write_ts.get(key, 0.0) < _CONTACT_WRITE_DT:
+        return
+    _contact_write_ts[key] = now
+    try:
+        get_store().record_contact(int(now), key, kind, label, ident, info, lat, lon)
+    except Exception:
+        log.exception("record_contact failed")
+        return
+    if now - _contact_emit_ts[0] >= _CONTACT_EMIT_DT:
+        _contact_emit_ts[0] = now
+        _emit_contacts()
+
+
+def _receiver_geotag():
+    """Coarsened receiver geolocation if GPS is enabled and has a fix, else None."""
+    geo = _gps.geolocation()
+    if geo is None:
+        return None
+    try:
+        return coarsen_geolocation(geo, str(get_store().get_setting("gps_precision", "full")))
+    except Exception:
+        return None
+
+
 def _emit_event(event: dict) -> None:
     socketio.emit("decoded", event)
+    model = event.get("model")
+    if not model:
+        return
+    ident = str(event.get("id", event.get("channel", "")))
+    info = {k: event[k] for k in ("channel", "battery_ok", "temperature_C",
+                                  "humidity", "freq", "rssi") if k in event}
+    geo = _receiver_geotag()
+    _record_contact(f"ism:{model}:{ident}", "ism", str(model), ident=ident, info=info,
+                    lat=(geo or {}).get("lat"), lon=(geo or {}).get("lon"))
 
 
 def _emit_status() -> None:
@@ -313,6 +362,12 @@ def _emit_adsb(aircraft: list[dict], meta: dict) -> None:
         country = icao_country(hx)
         if country:
             a["country"] = country
+        label = (a.get("flight") or "").strip() or reg or hx.upper()
+        info = {k: v for k, v in {"registration": reg, "country": country,
+                                  "alt": a.get("alt_baro"), "gs": a.get("gs")}.items()
+                if v is not None}
+        _record_contact(f"adsb:{hx}", "adsb", label, ident=hx, info=info,
+                        lat=a.get("lat"), lon=a.get("lon"))
     socketio.emit("adsb", {"aircraft": aircraft, "meta": meta})
 
 
@@ -655,7 +710,7 @@ def _start_decode_file(name: str) -> bool:
 
         dec = IqFileDecoder(
             match["path"], sr, center,
-            on_event=lambda ev: socketio.emit("decoded", ev),
+            on_event=_emit_event,   # also records to the inventory
             on_done=on_done,
         )
         _state["decode_file"] = dec
@@ -812,6 +867,7 @@ def on_connect():
         "recording": _audio_rec["recorder"] is not None,
         "name": _audio_rec["record"].name if _audio_rec["record"] else None,
     })
+    emit("contacts", {"data": get_store().list_contacts()})
     emit("captures", {"items": _enriched_captures()})
 
 
@@ -1218,6 +1274,23 @@ def on_stop_audio_record(data=None):
         _finalize_audio_record_locked()
     if active and record is not None:
         _emit_toast("info", f"Saved {record.name} ({record.duration_s:.1f}s)")
+
+
+@socketio.on("list_inventory")
+def on_list_inventory():
+    _emit_contacts()
+
+
+@socketio.on("clear_inventory")
+def on_clear_inventory(data=None):
+    try:
+        n = get_store().clear_contacts()
+    except Exception as e:
+        _emit_toast("error", str(e))
+        return
+    _contact_write_ts.clear()
+    _emit_contacts()
+    _emit_toast("info", f"Cleared {n} contacts")
 
 
 def main() -> None:

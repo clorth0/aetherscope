@@ -371,6 +371,40 @@ def test_concurrent_inserts():
 
 
 # ---------------------------------------------------------------------------
+# Contact inventory
+# ---------------------------------------------------------------------------
+
+def test_contacts_record_and_upsert():
+    s = _make_store()
+    now = 1_700_000_000
+    c = s.record_contact(now, "adsb:a01391", "adsb", "N104B", ident="a01391",
+                         info={"country": "United States"}, lat=38.7, lon=-77.8)
+    assert c["count"] == 1
+    assert c["first_seen"] == now and c["last_seen"] == now
+    assert c["info"] == {"country": "United States"}
+    assert c["lat"] == 38.7
+
+    c2 = s.record_contact(now + 60, "adsb:a01391", "adsb", "UAL123", ident="a01391",
+                          info={"country": "United States", "alt": 35000})
+    assert c2["count"] == 2
+    assert c2["first_seen"] == now and c2["last_seen"] == now + 60
+    assert c2["label"] == "UAL123"            # refreshed
+    assert c2["lat"] == 38.7                  # kept (sighting had no position)
+    assert c2["info"]["alt"] == 35000
+
+
+def test_contacts_list_and_clear():
+    s = _make_store()
+    now = 1_700_000_000
+    s.record_contact(now, "ism:Acurite/1", "ism", "Acurite")
+    s.record_contact(now + 10, "adsb:abc", "adsb", "ZZZ")
+    keys = [r["key"] for r in s.list_contacts()]
+    assert keys == ["adsb:abc", "ism:Acurite/1"]   # last_seen desc
+    assert s.clear_contacts() == 2
+    assert s.list_contacts() == []
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 

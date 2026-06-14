@@ -112,6 +112,22 @@ CREATE TABLE IF NOT EXISTS captures (
 );
 """
 
+# v2: persistent contact inventory (ADS-B aircraft, rtl_433 ISM devices).
+_V2_SCHEMA = """
+CREATE TABLE IF NOT EXISTS contacts (
+  key        TEXT PRIMARY KEY,        -- 'adsb:<hex>' | 'ism:<model>:<id>'
+  kind       TEXT    NOT NULL,
+  label      TEXT    NOT NULL,
+  ident      TEXT    NOT NULL DEFAULT '',
+  info       TEXT    NOT NULL DEFAULT '',
+  count      INTEGER NOT NULL DEFAULT 1,
+  first_seen INTEGER NOT NULL,
+  last_seen  INTEGER NOT NULL,
+  lat        REAL,
+  lon        REAL
+);
+"""
+
 # ---------------------------------------------------------------------------
 # Row helpers
 # ---------------------------------------------------------------------------
@@ -130,6 +146,16 @@ def _cap_dict(row) -> dict:
     d = dict(row)
     raw = d.get("tags") or ""
     d["tags"] = [t for t in raw.split(",") if t]
+    return d
+
+
+def _contact_dict(row) -> dict:
+    """Convert a contacts sqlite3.Row to a plain dict, info decoded to a dict."""
+    d = dict(row)
+    try:
+        d["info"] = json.loads(d.get("info") or "{}")
+    except (ValueError, TypeError):
+        d["info"] = {}
     return d
 
 
@@ -177,6 +203,16 @@ class Store:
                     for stmt in filter(str.strip, _V1_SCHEMA.split(";")):
                         self._conn.execute(stmt)
                     self._conn.execute("PRAGMA user_version = 1")
+                    self._conn.commit()
+                except Exception:
+                    self._conn.rollback()
+                    raise
+            if version < 2:
+                try:
+                    self._conn.execute("BEGIN")
+                    for stmt in filter(str.strip, _V2_SCHEMA.split(";")):
+                        self._conn.execute(stmt)
+                    self._conn.execute("PRAGMA user_version = 2")
                     self._conn.commit()
                 except Exception:
                     self._conn.rollback()
@@ -397,6 +433,51 @@ class Store:
             )
             self._conn.commit()
         return cur.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Contact inventory
+    # ------------------------------------------------------------------
+
+    def record_contact(self, now, key, kind, label, ident="", info=None,
+                       lat=None, lon=None) -> dict:
+        """Upsert a contact sighting. First time sets first_seen; later sightings
+        bump last_seen + count and refresh fields. lat/lon keep the last known
+        value if a sighting has no position (COALESCE)."""
+        info_str = json.dumps(info or {})
+        with self._lock:
+            exists = self._conn.execute(
+                "SELECT 1 FROM contacts WHERE key = ?", (key,)).fetchone()
+            if exists is None:
+                self._conn.execute(
+                    """INSERT INTO contacts
+                       (key, kind, label, ident, info, count, first_seen, last_seen, lat, lon)
+                       VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)""",
+                    (key, kind, label, ident, info_str, now, now, lat, lon))
+            else:
+                self._conn.execute(
+                    """UPDATE contacts
+                       SET label=?, ident=?, info=?, count=count+1, last_seen=?,
+                           lat=COALESCE(?, lat), lon=COALESCE(?, lon)
+                       WHERE key=?""",
+                    (label, ident, info_str, now, lat, lon, key))
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT * FROM contacts WHERE key = ?", (key,)).fetchone()
+        return _contact_dict(row)
+
+    def list_contacts(self) -> list:
+        """All contacts, most recently seen first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM contacts ORDER BY last_seen DESC").fetchall()
+        return [_contact_dict(r) for r in rows]
+
+    def clear_contacts(self) -> int:
+        """Delete all contacts. Returns the number removed."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM contacts")
+            self._conn.commit()
+        return cur.rowcount
 
     # ------------------------------------------------------------------
     # Seeding

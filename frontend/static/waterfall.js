@@ -32,6 +32,7 @@ const paneAdsb    = document.getElementById("pane-adsb");
 const paneScan    = document.getElementById("pane-scan");
 const viewRadio   = document.getElementById("view-radio");
 const paneRadio   = document.getElementById("pane-radio");
+const viewInventory = document.getElementById("view-inventory");
 
 let currentMode    = "sweep";       // UI tab (sweep | decode | capture | adsb | scan)
 let serverMode     = "idle";        // backend mode (idle | sweep | decode | capture | adsb | scan)
@@ -92,6 +93,7 @@ function setMode(mode) {
   viewAdsb.hidden    = mode !== "adsb";
   viewScan.hidden    = mode !== "scan";
   viewRadio.hidden   = mode !== "radio";
+  viewInventory.hidden = mode !== "inventory";
   paneSweep.hidden   = mode !== "sweep";
   paneDecode.hidden  = mode !== "decode";
   paneCapture.hidden = mode !== "capture";
@@ -104,6 +106,7 @@ function setMode(mode) {
   if (mode === "sweep") requestAnimationFrame(fitAll);
   if (mode === "capture") socket.emit("list_captures");
   if (mode === "adsb") initAdsbMap();
+  if (mode === "inventory") socket.emit("list_inventory");
 }
 
 document.querySelectorAll(".mode-tab").forEach(tab => {
@@ -2296,6 +2299,61 @@ socket.on("iq_play_done", (m) => {
   iqPlayBar.hidden = true;
   stopRadioPlayback();
   iqPlayCurrent = null;
+});
+
+// ---- Device inventory (persistent "what's around me" catalog) ----
+let contacts = [];
+let invFilter = "";
+const inventoryListEl = document.getElementById("inventory-list");
+const invFilterEl = document.getElementById("inv-filter");
+
+function infoSummary(info) {
+  if (!info || typeof info !== "object") return "";
+  return Object.keys(info).filter(k => info[k] != null)
+    .slice(0, 4).map(k => `${k}=${info[k]}`).join(" · ");
+}
+function renderInventory() {
+  if (!inventoryListEl) return;
+  if (!contacts.length) {
+    inventoryListEl.innerHTML = `<div class="event-empty">No contacts yet. Run ADS-B or Decode to populate the inventory.</div>`;
+    return;
+  }
+  const filtered = contacts.filter(c => {
+    if (!invFilter) return true;
+    const blob = `${c.label} ${c.ident} ${c.kind} ${(c.info && c.info.country) || ""}`.toLowerCase();
+    return blob.includes(invFilter);
+  });
+  const header = `<div class="inv-header">
+    <span>Kind</span><span>Label</span><span>Ident</span><span>Info</span>
+    <span>Count</span><span>First</span><span>Last</span><span>Location</span>
+  </div>`;
+  const rows = filtered.map(c => {
+    const loc = (c.lat != null && c.lon != null) ? `${c.lat.toFixed(3)}, ${c.lon.toFixed(3)}` : "—";
+    return `<div class="inv-row">
+      <span class="inv-kind ${escapeHtml(c.kind)}">${escapeHtml(c.kind)}</span>
+      <span>${escapeHtml(c.label || "")}</span>
+      <span class="mono">${escapeHtml(String(c.ident || ""))}</span>
+      <span class="inv-info">${escapeHtml(infoSummary(c.info))}</span>
+      <span>${c.count}</span>
+      <span>${fmtAgo(c.first_seen)}</span>
+      <span>${fmtAgo(c.last_seen)}</span>
+      <span class="mono">${escapeHtml(loc)}</span>
+    </div>`;
+  }).join("");
+  inventoryListEl.innerHTML = header + rows;
+}
+socket.on("contacts", (msg) => {
+  contacts = (msg && msg.data) || [];
+  if (currentMode === "inventory") renderInventory();
+});
+if (invFilterEl) {
+  invFilterEl.addEventListener("input", () => {
+    invFilter = invFilterEl.value.trim().toLowerCase();
+    renderInventory();
+  });
+}
+document.getElementById("btn-clear-inventory").addEventListener("click", () => {
+  if (confirm("Clear the entire device inventory?")) socket.emit("clear_inventory");
 });
 
 // ---- Scanner: cycle the marked frequencies, stop on activity ----

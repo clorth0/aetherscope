@@ -1207,6 +1207,24 @@ canvas {
 .iq-play-controls select { background: var(--bg-2, #12151c); color: var(--fg, #cfd6e4); border: 1px solid var(--border, #1e2530); border-radius: 4px; padding: 2px 6px; }
 .iq-play-controls input[type=range] { flex: 1; min-width: 120px; }
 
+/* Device inventory */
+.inv-toolbar { display: flex; gap: 8px; padding: 8px; align-items: center; }
+.inv-toolbar input { flex: 1; }
+.inv-header, .inv-row {
+  display: grid;
+  grid-template-columns: 56px 1.4fr 1fr 1.6fr 56px 84px 84px 1.2fr;
+  gap: 8px; padding: 4px 8px; align-items: center;
+  font: 12px var(--mono, ui-monospace, Menlo, monospace);
+}
+.inv-header { color: var(--fg-dim, #8a93a6); border-bottom: 1px solid var(--border, #1e2530); }
+.inv-row { border-bottom: 1px solid rgba(255,255,255,0.04); }
+.inv-row .mono { color: var(--fg-dim, #8a93a6); }
+.inv-info { color: var(--fg-dim, #8a93a6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-kind { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 11px; text-align: center;
+  background: var(--bg-2, #12151c); border: 1px solid var(--border, #1e2530); }
+.inv-kind.adsb { color: #7aa2e0; border-color: #3a4a6a; }
+.inv-kind.ism { color: #6fcf86; border-color: #2f5d3a; }
+
 /* Mark save-to-bookmark button */
 .mark-save { color: #e0b94d; }
 
