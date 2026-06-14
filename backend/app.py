@@ -738,8 +738,11 @@ def on_start_scan_radio(data):
 @socketio.on("start_replay")
 def on_start_replay(data):
     name = (data or {}).get("name", "")
-    if name:
-        _start_replay(name)
+    if name and _start_replay(name):
+        try:
+            get_store().touch_capture(int(time.time()), name)
+        except Exception:
+            log.exception("touch_capture failed")
 
 
 @socketio.on("start_scan")
@@ -827,11 +830,12 @@ def on_delete_capture(data):
 @socketio.on("update_capture")
 def on_update_capture(data):
     data = data or {}
-    try:
-        filename = data["filename"]
-    except KeyError:
-        _emit_toast("error", "update_capture requires filename")
+    filename = data.get("filename")
+    if not isinstance(filename, str) or not filename:
+        _emit_toast("error", "update_capture requires a filename")
         return
+    # Annotations are keyed by filename and may outlive the file (the captures
+    # list flags missing .iq files); orphan rows are cleared on delete_capture.
     try:
         get_store().upsert_capture_annotation(
             filename,
@@ -841,6 +845,10 @@ def on_update_capture(data):
         )
     except (ValueError, TypeError) as e:
         _emit_toast("error", str(e))
+        return
+    except Exception:
+        log.exception("update_capture failed")
+        _emit_toast("error", "Could not save capture annotation")
         return
     _emit_captures_list()
 

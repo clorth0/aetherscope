@@ -253,6 +253,18 @@ def test_capture_annotation():
     assert s.delete_capture_annotation(fname) is False
 
 
+def test_capture_annotation_validation():
+    s = _make_store()
+    for bad in ({"user_label": "x" * 81}, {"notes": "y" * 501}, {"user_label": 5}, {"notes": []}):
+        try:
+            s.upsert_capture_annotation("a.iq", **bad)
+            raise AssertionError(f"accepted invalid annotation {bad}")
+        except ValueError:
+            pass
+    # No row was written by the rejected upserts
+    assert s.list_capture_annotations() == {}
+
+
 def test_list_capture_annotations():
     s = _make_store()
     assert s.list_capture_annotations() == {}

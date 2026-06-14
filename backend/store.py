@@ -70,6 +70,17 @@ def validate_bookmark(freq_hz, demod, label, notes) -> None:
         raise ValueError("notes must be a string of at most 500 chars")
 
 
+def validate_capture_annotation(user_label, notes) -> None:
+    """Raise ValueError on invalid capture-annotation fields.
+
+    Bounds mirror bookmarks: user_label <= 80 chars, notes <= 500 chars.
+    """
+    if not isinstance(user_label, str) or len(user_label) > 80:
+        raise ValueError("user_label must be a string of at most 80 chars")
+    if not isinstance(notes, str) or len(notes) > 500:
+        raise ValueError("notes must be a string of at most 500 chars")
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -349,6 +360,7 @@ class Store:
         tags=(),
     ) -> dict:
         """Insert or update capture annotation (tags normalized). Returns row dict."""
+        validate_capture_annotation(user_label, notes)
         tags_str = normalize_tags(tags)
         with self._lock:
             self._conn.execute(
