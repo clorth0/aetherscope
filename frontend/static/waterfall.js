@@ -559,7 +559,9 @@ function showToast(level, message) {
   });
 }
 
-// Flag to guard against settings restore firing set_setting echoes.
+// Persisted UI settings are applied once, on the first status event that
+// carries them. Reconnects re-send status, so this flag keeps the restore from
+// yanking the user's current pane (setMode) or re-applying values mid-session.
 let _settingsRestored = false;
 
 socket.on("status", (s) => {
@@ -1842,11 +1844,17 @@ radioFreqEl.addEventListener("change", () => {
   if (Number.isFinite(v)) socket.emit("set_setting", { key: "last_radio_freq", value: v });
 });
 
+let _volSaveTimer = null;
 radioVolEl.addEventListener("input", () => {
   radioVolVal.textContent = `${radioVolEl.value}%`;
   if (radioGain) radioGain.gain.value = radioVolume();
   updateSliderFills(["radio_vol"]);
-  socket.emit("set_setting", { key: "radio_volume", value: parseInt(radioVolEl.value, 10) });
+  // Audio/fill stay real-time; persist is debounced so a drag does not flood
+  // the socket with set_setting messages.
+  clearTimeout(_volSaveTimer);
+  _volSaveTimer = setTimeout(() => {
+    socket.emit("set_setting", { key: "radio_volume", value: parseInt(radioVolEl.value, 10) });
+  }, 400);
 });
 updateSliderFills(["radio_vol"]);
 
