@@ -585,6 +585,9 @@ function clearAdsbVisuals() {
   if (adsbMap) {
     for (const m of adsbMarkers.values()) adsbMap.removeLayer(m);
     adsbMarkers.clear();
+    for (const tr of adsbTrails.values()) adsbMap.removeLayer(tr);
+    adsbTrails.clear();
+    adsbTracks.clear();
   }
   adsbAircraft = [];
   const statsEl = document.getElementById("adsb-stats");
@@ -1295,6 +1298,9 @@ socket.on("captures", (msg) => {
 // ------------------------------------------------------------------
 let adsbMap = null;
 let adsbMarkers = new Map();   // hex -> Leaflet marker
+let adsbTracks = new Map();    // hex -> [[lat,lon], ...] recent positions
+let adsbTrails = new Map();    // hex -> Leaflet LayerGroup of fading trail segments
+const ADSB_TRACK_MAX = 40;     // points of history kept per aircraft
 let adsbAircraft = [];
 let adsbFilter = "";
 
@@ -1319,13 +1325,21 @@ function initAdsbMap() {
   setTimeout(() => adsbMap.invalidateSize(), 50);
 }
 
-function planeIcon(track) {
+// Deterministic vivid color per aircraft, stable across updates (from the hex).
+function acColor(hex) {
+  let h = 0;
+  for (let i = 0; i < hex.length; i++) h = (h * 31 + hex.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360}, 75%, 60%)`;
+}
+
+function planeIcon(track, color) {
   const angle = (track || 0).toFixed(0);
+  const c = color || "#4dd0e1";
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
-         style="transform: rotate(${angle}deg); filter: drop-shadow(0 0 3px rgba(77,208,225,0.6));">
+         style="transform: rotate(${angle}deg); filter: drop-shadow(0 0 3px ${c});">
       <path d="M12 2 L14.5 12 L22 14 L14 16 L12 22 L10 16 L2 14 L9.5 12 Z"
-            fill="#4dd0e1" stroke="#0a0c10" stroke-width="0.6"/>
+            fill="${c}" stroke="#0a0c10" stroke-width="0.6"/>
     </svg>`;
   return L.divIcon({
     html: svg,
@@ -1333,6 +1347,23 @@ function planeIcon(track) {
     iconSize: [22, 22],
     iconAnchor: [11, 11],
   });
+}
+
+// Redraw an aircraft's trail: one segment per hop, fading from oldest (faint)
+// to newest (bright), in the aircraft's color.
+function drawTrail(hex) {
+  const old = adsbTrails.get(hex);
+  if (old) { adsbMap.removeLayer(old); adsbTrails.delete(hex); }
+  const pts = adsbTracks.get(hex);
+  if (!pts || pts.length < 2) return;
+  const color = acColor(hex);
+  const group = L.layerGroup();
+  for (let i = 0; i < pts.length - 1; i++) {
+    const t = (pts.length <= 2) ? 1 : i / (pts.length - 2);   // 0 oldest .. 1 newest
+    L.polyline([pts[i], pts[i + 1]], { color, weight: 2, opacity: 0.12 + 0.7 * t }).addTo(group);
+  }
+  group.addTo(adsbMap);
+  adsbTrails.set(hex, group);
 }
 
 function fmtAlt(ft) {
@@ -1396,23 +1427,36 @@ function updateAdsbMap(aircraft) {
       Speed: ${fmtKnots(a.gs)} kts<br>
       Track: ${fmtTrack(a.track)}<br>
       RSSI: ${fmtRssi(a.rssi)} dB`;
+    const color = acColor(a.hex);
+    // append to the position history (skip identical consecutive fixes)
+    let track = adsbTracks.get(a.hex);
+    if (!track) { track = []; adsbTracks.set(a.hex, track); }
+    const last = track[track.length - 1];
+    if (!last || last[0] !== a.lat || last[1] !== a.lon) {
+      track.push([a.lat, a.lon]);
+      if (track.length > ADSB_TRACK_MAX) track.shift();
+      drawTrail(a.hex);
+    }
     let m = adsbMarkers.get(a.hex);
     if (!m) {
-      m = L.marker([a.lat, a.lon], { icon: planeIcon(a.track) });
+      m = L.marker([a.lat, a.lon], { icon: planeIcon(a.track, color) });
       m.bindPopup(popup);
       m.addTo(adsbMap);
       adsbMarkers.set(a.hex, m);
     } else {
       m.setLatLng([a.lat, a.lon]);
-      m.setIcon(planeIcon(a.track));
+      m.setIcon(planeIcon(a.track, color));
       m.setPopupContent(popup);
     }
   }
-  // remove markers for aircraft no longer present
+  // remove markers + trails for aircraft no longer present
   for (const [hex, m] of adsbMarkers.entries()) {
     if (!seenHex.has(hex)) {
       adsbMap.removeLayer(m);
       adsbMarkers.delete(hex);
+      const tr = adsbTrails.get(hex);
+      if (tr) { adsbMap.removeLayer(tr); adsbTrails.delete(hex); }
+      adsbTracks.delete(hex);
     }
   }
   const statsEl = document.getElementById("adsb-stats");
