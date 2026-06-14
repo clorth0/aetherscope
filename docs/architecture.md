@@ -24,6 +24,13 @@
   `AETHERSCOPE_DATA_DIR`, default `~/.local/share/aetherscope/`) holding
   bookmarks, persisted UI settings, and capture annotations. It is thread-safe
   (one connection, WAL, a lock) and parameterized throughout.
+- **GPS geotagging (optional, opt-in).** `gps.py` reads a local gpsd over a raw
+  socket (`AETHERSCOPE_GPSD_HOST`/`PORT`, default 127.0.0.1:2947), only while the
+  `gps_enabled` toggle is on (`AETHERSCOPE_GPS=0` hard-disables it). When a fresh
+  fix exists, captures are stamped with a full-precision `geolocation` in their
+  sidecar; a per-capture redaction action scrubs it. Position is pushed live as
+  `gps_status`; lat/lon never reach the logs. Capture timestamps stay on the
+  system clock (the puck has no PPS).
 
 ## Tech stack
 
@@ -37,7 +44,7 @@ Content-Security-Policy, so the app shell works fully offline.
 - `backend/`: Flask app (`app.py`), per-mode subprocess wrappers
   (`sdr.py`, `radio.py`, `decoders.py`, `adsb.py`, `capture.py`, `scan.py`),
   offline `replay.py`, snap-to-peak `tuning.py`, SQLite `store.py`,
-  `telemetry.py`, `device.py`.
+  optional gpsd geotagging `gps.py`, `telemetry.py`, `device.py`.
 - `frontend/`: `templates/index.html`, `static/` (canvas/UI JS, AudioWorklet,
   CSS, vendored deps).
 - `deploy/`: installers, launchd template, `restart.sh`, `Caddyfile.example`.
