@@ -27,6 +27,7 @@ from flask import Flask, jsonify, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 
 from .adsb import AdsbConfig, AdsbReceiver
+from .adsb_enrich import icao_to_registration, icao_country
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_error, delete_capture, list_captures, redact_location
 from .gps import GpsClient, coarsen_geolocation
 from .audio_record import start_recording, finalize_recording
@@ -302,6 +303,16 @@ def _emit_captures_list() -> None:
 
 
 def _emit_adsb(aircraft: list[dict], meta: dict) -> None:
+    for a in aircraft:
+        hx = a.get("hex")
+        if not hx:
+            continue
+        reg = a.get("r") or icao_to_registration(hx)   # prefer readsb's own
+        if reg:
+            a["registration"] = reg
+        country = icao_country(hx)
+        if country:
+            a["country"] = country
     socketio.emit("adsb", {"aircraft": aircraft, "meta": meta})
 
 

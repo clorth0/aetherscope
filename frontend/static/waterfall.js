@@ -1607,17 +1607,70 @@ function renderAircraftList() {
   list.innerHTML = header + rows;
 }
 
-function updateAdsbMap(aircraft) {
+function haversineNm(lat1, lon1, lat2, lon2) {
+  const R = 3440.065, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+  const dLon = toRad(lon2 - lon1);
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+function getRxPosition() {
+  const lat = parseFloat(document.getElementById("adsb_lat").value);
+  const lon = parseFloat(document.getElementById("adsb_lon").value);
+  if (Number.isFinite(lat) && Number.isFinite(lon)) return [lat, lon];
+  if (gpsState && gpsState.enabled && gpsState.lat != null && !gpsState.stale)
+    return [gpsState.lat, gpsState.lon];
+  return null;
+}
+let adsbRings = [];
+let adsbRingsKey = null;
+function maybeDrawRings() {
   if (!adsbMap) return;
+  const rx = getRxPosition();
+  const key = rx ? rx.join(",") : null;
+  if (key === adsbRingsKey) return;
+  adsbRingsKey = key;
+  for (const r of adsbRings) adsbMap.removeLayer(r);
+  adsbRings = [];
+  if (!rx) return;
+  for (const nm of [50, 100, 150]) {
+    const c = L.circle(rx, { radius: nm * 1852, color: "#3a4a6a", weight: 1,
+      fill: false, dashArray: "4 6", interactive: false }).addTo(adsbMap);
+    c.bindTooltip(`${nm} nm`);
+    adsbRings.push(c);
+  }
+}
+
+function updateAdsbMap(aircraft, meta) {
+  if (!adsbMap) return;
+  maybeDrawRings();
+  const rx = getRxPosition();
   const seenHex = new Set();
-  let withPos = 0;
+  let withPos = 0, maxRangeNm = 0;
   for (const a of aircraft) {
     if (a.lat == null || a.lon == null) continue;
     withPos++;
     seenHex.add(a.hex);
     const flight = (a.flight || "").trim();
-    const popup = `<b>${flight || a.hex.toUpperCase()}</b><br>
-      ${flight ? a.hex.toUpperCase() + "<br>" : ""}
+    let distStr = "";
+    if (rx) {
+      const d = haversineNm(rx[0], rx[1], a.lat, a.lon);
+      if (d > maxRangeNm) maxRangeNm = d;
+      distStr = `Range: ${d.toFixed(0)} nm @ ${bearingDeg(rx[0], rx[1], a.lat, a.lon).toFixed(0)}&deg;<br>`;
+    }
+    const reg = a.registration ? `Reg: ${escapeHtml(a.registration)}<br>` : "";
+    const country = a.country ? `${escapeHtml(a.country)}<br>` : "";
+    const popup = `<b>${escapeHtml(flight || a.hex.toUpperCase())}</b><br>
+      ${flight ? escapeHtml(a.hex.toUpperCase()) + "<br>" : ""}
+      ${reg}${country}${distStr}
       Alt: ${fmtAlt(a.alt_baro)} ft<br>
       Speed: ${fmtKnots(a.gs)} kts<br>
       Track: ${fmtTrack(a.track)}<br>
@@ -1654,9 +1707,21 @@ function updateAdsbMap(aircraft) {
       adsbTracks.delete(hex);
     }
   }
+  let rateStr = "";
+  if (meta && typeof meta.messages === "number" && typeof meta.now === "number") {
+    if (adsbMsgPrev != null && meta.now > adsbMsgPrevT) {
+      const r = (meta.messages - adsbMsgPrev) / (meta.now - adsbMsgPrevT);
+      if (r >= 0) rateStr = ` · ${r.toFixed(0)} msg/s`;
+    }
+    adsbMsgPrev = meta.messages;
+    adsbMsgPrevT = meta.now;
+  }
+  const rangeStr = maxRangeNm > 0 ? ` · max ${maxRangeNm.toFixed(0)} nm` : "";
   const statsEl = document.getElementById("adsb-stats");
-  if (statsEl) statsEl.textContent = `${aircraft.length} tracked · ${withPos} with position`;
+  if (statsEl) statsEl.textContent = `${aircraft.length} tracked · ${withPos} with position${rangeStr}${rateStr}`;
 }
+let adsbMsgPrev = null;
+let adsbMsgPrevT = 0;
 
 document.getElementById("adsb_gain").addEventListener("input", e => {
   document.getElementById("adsb_gain_val").textContent = `${e.target.value} dB`;
@@ -1716,7 +1781,7 @@ document.getElementById("btn-stop-adsb").addEventListener("click", (e) => {
 socket.on("adsb", (msg) => {
   adsbAircraft = msg.aircraft || [];
   if (currentMode === "adsb") {
-    updateAdsbMap(adsbAircraft);
+    updateAdsbMap(adsbAircraft, msg.meta);
     renderAircraftList();
   }
 });
