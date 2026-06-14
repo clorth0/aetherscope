@@ -66,13 +66,26 @@ def _inject_version():
 
 
 @app.after_request
-def _no_cache_static(resp):
+def _response_headers(resp):
     # Static assets are tiny and we always want the newest version after
     # a service restart. Tell browsers not to keep them.
     if resp.headers.get("Content-Type", "").startswith(("application/javascript", "text/css")):
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
+    # All front-end deps are vendored locally, so the CSP can be strict.
+    # Map tiles are the only external resource (cartocdn, img only).
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https://*.basemaps.cartocdn.com; "
+        "connect-src 'self'; "
+        "worker-src 'self' blob:; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    )
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
     return resp
 
 DEVICE_POLL_INTERVAL = 2.5
