@@ -56,7 +56,8 @@ Content-Security-Policy, so the app shell works fully offline.
   offline `replay.py`, snap-to-peak `tuning.py`, SQLite `store.py`,
   optional gpsd geotagging `gps.py`, SigMF export `sigmf.py`,
   WAV audio recording `audio_record.py`, IQ-capture playback `iq_playback.py`
-  and file decode `decode_file.py`, `telemetry.py`, `device.py`.
+  and file decode `decode_file.py`, ADS-B enrichment `adsb_enrich.py`,
+  `telemetry.py`, `device.py`.
 - `frontend/`: `templates/index.html`, `static/` (canvas/UI JS, AudioWorklet,
   CSS, vendored deps).
 - `deploy/`: installers, launchd template, `restart.sh`, `Caddyfile.example`.
