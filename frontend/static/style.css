@@ -1025,3 +1025,36 @@ canvas {
   color: var(--fg-dim);
   font-variant-numeric: tabular-nums;
 }
+
+/* ------------------------------------------------------------------ */
+/* Spectrum hover label + marked frequencies                          */
+/* ------------------------------------------------------------------ */
+.hover-tag {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  padding: 2px 7px;
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--bg-0);
+  background: var(--accent-strong);
+  border-radius: 4px;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.marks-list { display: flex; flex-direction: column; gap: 4px; }
+.mark-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.mark-freq {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.mark-del { color: var(--fg-dim); }

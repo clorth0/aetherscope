@@ -42,6 +42,23 @@ let sweepTimestamps = [];
 let events       = [];
 let eventFilter  = "";
 
+// Saved frequency marks on the sweep spectrum: [{hz}], persisted in the browser.
+function loadMarks() {
+  try { return JSON.parse(localStorage.getItem("aetherscope.marks") || "[]"); }
+  catch (e) { return []; }
+}
+function saveMarks() {
+  try { localStorage.setItem("aetherscope.marks", JSON.stringify(marks)); }
+  catch (e) { /* ignore storage errors */ }
+}
+let marks = loadMarks();
+
+// Cursor-following frequency label for the spectrum.
+const hoverTag = document.createElement("div");
+hoverTag.className = "hover-tag";
+hoverTag.hidden = true;
+document.body.appendChild(hoverTag);
+
 const MAX_EVENTS    = 500;
 const POWER_MIN     = -100;
 const POWER_MAX     = -20;
@@ -262,6 +279,19 @@ function drawFFT(powers) {
     fftCtx.lineTo(cursorX + 0.5, plot.y + plot.h);
     fftCtx.stroke();
     fftCtx.setLineDash([]);
+  }
+  // saved frequency marks (gold vertical lines)
+  if (lastSweep) {
+    for (const m of marks) {
+      if (m.hz < lastSweep.f0 || m.hz > lastSweep.f1) continue;
+      const mx = plot.x + ((m.hz - lastSweep.f0) / (lastSweep.f1 - lastSweep.f0)) * plot.w;
+      fftCtx.strokeStyle = "rgba(224, 185, 77, 0.9)";
+      fftCtx.lineWidth = 1;
+      fftCtx.beginPath();
+      fftCtx.moveTo(mx + 0.5, plot.y);
+      fftCtx.lineTo(mx + 0.5, plot.y + plot.h);
+      fftCtx.stroke();
+    }
   }
   fftCtx.strokeStyle = "#171c25";
   fftCtx.lineWidth = 1;
@@ -714,21 +744,105 @@ function handleHover(e) {
   const dB = lastSweep.powers[Math.max(0, Math.min(lastSweep.powers.length - 1, idx))];
   hoverFreqEl.textContent  = fmtFreq(freqHz);
   hoverPowerEl.textContent = `${dB.toFixed(1)} dBFS`;
+  hoverTag.textContent = fmtFreq(freqHz);
+  hoverTag.style.left = `${e.clientX + 12}px`;
+  hoverTag.style.top  = `${e.clientY + 14}px`;
+  hoverTag.hidden = false;
   drawFFT(lastSweep.powers);
 }
+function endHover(redraw) {
+  cursorX = -1;
+  hoverFreqEl.textContent  = "— MHz";
+  hoverPowerEl.textContent = "— dB";
+  hoverTag.hidden = true;
+  if (redraw && lastSweep) drawFFT(lastSweep.powers);
+}
 fftCanvas.addEventListener("mousemove", handleHover);
-fftCanvas.addEventListener("mouseleave", () => {
-  cursorX = -1;
-  hoverFreqEl.textContent  = "— MHz";
-  hoverPowerEl.textContent = "— dB";
-  if (lastSweep) drawFFT(lastSweep.powers);
-});
+fftCanvas.addEventListener("mouseleave", () => endHover(true));
 waterfallCanvas.addEventListener("mousemove", handleHover);
-waterfallCanvas.addEventListener("mouseleave", () => {
-  cursorX = -1;
-  hoverFreqEl.textContent  = "— MHz";
-  hoverPowerEl.textContent = "— dB";
-});
+waterfallCanvas.addEventListener("mouseleave", () => endHover(false));
+
+// ------------------------------------------------------------------
+// Marked frequencies: click the spectrum to save, then Listen
+// ------------------------------------------------------------------
+function freqAtCursor(e) {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const plotW = rect.width - FFT_PADDING.left - FFT_PADDING.right;
+  const t = Math.max(0, Math.min(1, (e.clientX - rect.left - FFT_PADDING.left) / plotW));
+  return lastSweep.f0 + t * (lastSweep.f1 - lastSweep.f0);
+}
+function addMark(hz) {
+  if (marks.some(m => Math.abs(m.hz - hz) < 50_000)) return; // dedupe within 50 kHz
+  marks.push({ hz });
+  marks.sort((a, b) => a.hz - b.hz);
+  saveMarks();
+  renderMarks();
+  if (lastSweep) drawFFT(lastSweep.powers);
+}
+function onSpectrumClick(e) {
+  if (!lastSweep || currentMode !== "sweep") return;
+  addMark(freqAtCursor(e));
+}
+fftCanvas.addEventListener("click", onSpectrumClick);
+waterfallCanvas.addEventListener("click", onSpectrumClick);
+
+function renderMarks() {
+  const el = document.getElementById("marks-list");
+  if (!el) return;
+  el.replaceChildren();
+  if (!marks.length) {
+    const empty = document.createElement("div");
+    empty.className = "event-empty";
+    empty.textContent = "Click the spectrum to mark a frequency.";
+    el.appendChild(empty);
+    return;
+  }
+  marks.forEach((m, i) => {
+    const row = document.createElement("div");
+    row.className = "mark-row";
+
+    const freq = document.createElement("span");
+    freq.className = "mark-freq";
+    freq.textContent = fmtFreq(m.hz);
+
+    const tune = document.createElement("button");
+    tune.className = "btn ghost small";
+    tune.textContent = "Listen";
+    tune.addEventListener("click", () => tuneToMark(m.hz));
+
+    const del = document.createElement("button");
+    del.className = "btn ghost small mark-del";
+    del.title = "Remove";
+    del.textContent = "×";
+    del.addEventListener("click", () => {
+      marks.splice(i, 1);
+      saveMarks();
+      renderMarks();
+      if (lastSweep) drawFFT(lastSweep.powers);
+    });
+
+    row.append(freq, tune, del);
+    el.appendChild(row);
+  });
+}
+
+async function tuneToMark(hz) {
+  const mhz = hz / 1e6;
+  setMode("radio");
+  radioFreqEl.value = mhz.toFixed(1);
+  setRadioDemod(mhz >= 88 && mhz <= 108 ? "fm" : "am");
+  try {
+    await ensureRadioAudio();
+  } catch (err) {
+    console.error("[aetherscope] audio init failed", err);
+    return;
+  }
+  radioNode.port.postMessage({ type: "flush" });
+  radioPlaying = true;
+  const freq = parseFloat(radioFreqEl.value);
+  socket.emit("start_radio", { demod: radioDemod, freq_mhz: freq });
+  setRadioNow("Tuning…", freq, radioDemod);
+}
 
 // ------------------------------------------------------------------
 // Capture mode
@@ -1399,5 +1513,6 @@ socket.on("radio_signal", (msg) => {
 });
 
 // initial
+renderMarks();
 setMode("sweep");
 requestAnimationFrame(fitAll);
