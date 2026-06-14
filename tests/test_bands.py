@@ -22,6 +22,15 @@ def test_known_bands_still_classify():
     assert classify_band(1_090_000_000)[0] == "ADS-B 1090"
 
 
+def test_gmrs_frs_nested_inside_uhf_business():
+    # GMRS/FRS (462.55-467.725) is a narrower band nested in UHF Business
+    # (450-470); the narrower label must win.
+    assert classify_band(462_562_500)[0] == "GMRS / FRS"   # FRS ch1 / GMRS
+    assert classify_band(467_587_500)[0] == "GMRS / FRS"   # FRS ch8 (467.x)
+    # a UHF business frequency outside GMRS still resolves to the broad band
+    assert classify_band(459_500_000)[0] == "UHF Business / Land Mobile"
+
+
 def test_true_gap_still_unknown():
     # 70 MHz is below the lowest mapped band -> genuinely unmapped.
     assert classify_band(70_000_000)[0] == "Unallocated / Unknown"
