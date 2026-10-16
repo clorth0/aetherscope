@@ -8,9 +8,10 @@
 ```
 
 - **One device, one job.** Every HackRF-claiming job (sweep, decode, capture,
-  ADS-B, radio, scanner, auto-scan) is mutually exclusive through a single
-  "current job" slot guarded by a reentrant lock. IQ replay is the exception: it
-  reads a file and uses no device.
+  ADS-B, radio, scanner, auto-scan) is mutually exclusive through one current
+  job on `jobs.JobBoard`, guarded by a reentrant lock. The job carries its
+  status label and whether it uses the device. IQ replay, IQ listen, and file
+  decode read a file and use no device, so a device probe can still run.
 - **Device poller** probes `hackrf_info` every 2.5 s to show live device status,
   and pauses while a job owns the HackRF so it does not contend with the running
   subprocess.
@@ -53,7 +54,7 @@ Content-Security-Policy, so the app shell works fully offline.
 
 ## Layout
 
-- `backend/`: Flask app (`app.py`), per-mode subprocess wrappers
+- `backend/`: Flask app (`app.py`), the single job board (`jobs.py`), per-mode subprocess wrappers
   (`sdr.py`, `radio.py`, `decoders.py`, `adsb.py`, `capture.py`, `scan.py`),
   offline `replay.py`, snap-to-peak `tuning.py`, SQLite `store.py`,
   optional gpsd geotagging `gps.py`, SigMF export `sigmf.py`,

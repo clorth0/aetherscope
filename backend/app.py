@@ -40,6 +40,7 @@ from .iq_playback import IqAudioPlayer
 from .decode_file import IqFileDecoder
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
+from .jobs import JobBoard, mode_spec
 from .store import get_store
 from . import telemetry
 
@@ -126,23 +127,11 @@ DEVICE_POLL_INTERVAL = 2.5
 # while already holding the lock).
 _state_lock = threading.RLock()
 
-# Monotonic generation counter — bumped on every successful job start.
-# on_exit callbacks check this to ignore stale completions from jobs
-# that have already been superseded.
-_current_job_gen = 0
+# The only running job. Persisted configs stay in _state so the UI can
+# restore the last sweep, radio, and so on while the board is idle.
+_jobs = JobBoard()
 
 _state: dict = {
-    "mode": "idle",             # "idle" | "sweep" | "decode" | "capture" | "adsb" | "scan" | "radio"
-    "streamer": None,
-    "decoder": None,
-    "capture": None,
-    "adsb": None,
-    "scanner": None,
-    "radio": None,
-    "scan_radio": None,
-    "replay": None,
-    "iq_play": None,
-    "decode_file": None,
     "sweep_config": SweepConfig(),
     "decode_config": DecodeConfig(),
     "capture_config": CaptureConfig(),
@@ -261,17 +250,22 @@ def _emit_event(event: dict) -> None:
                     lat=(geo or {}).get("lat"), lon=(geo or {}).get("lon"))
 
 
+def _status_fields_locked() -> dict:
+    return {
+        "mode": _jobs.mode(),
+        "status_label": _jobs.status_label(),
+        "sweep_config": asdict(_state["sweep_config"]),
+        "decode_config": asdict(_state["decode_config"]),
+        "capture_config": asdict(_state["capture_config"]),
+        "adsb_config": asdict(_state["adsb_config"]),
+        "radio_config": asdict(_state["radio_config"]),
+        "scan_config": _state["scan_config"].__dict__,
+    }
+
+
 def _emit_status() -> None:
     with _state_lock:
-        snapshot = {
-            "mode": _state["mode"],
-            "sweep_config": asdict(_state["sweep_config"]),
-            "decode_config": asdict(_state["decode_config"]),
-            "capture_config": asdict(_state["capture_config"]),
-            "adsb_config": asdict(_state["adsb_config"]),
-            "radio_config": asdict(_state["radio_config"]),
-            "scan_config": _state["scan_config"].__dict__,
-        }
+        snapshot = _status_fields_locked()
     socketio.emit("status", snapshot)
 
 
@@ -286,12 +280,17 @@ def _emit_gps_status() -> None:
     socketio.emit("gps_status", _gps.position())
 
 
+def _audio_status_snapshot() -> dict:
+    with _state_lock:
+        record = _audio_rec["record"]
+        return {
+            "recording": _audio_rec["recorder"] is not None,
+            "name": record.name if record else None,
+        }
+
+
 def _emit_audio_record_status() -> None:
-    rec = _audio_rec["record"]
-    socketio.emit("audio_record_status", {
-        "recording": _audio_rec["recorder"] is not None,
-        "name": rec.name if rec else None,
-    })
+    socketio.emit("audio_record_status", _audio_status_snapshot())
 
 
 def _on_radio_audio(pcm: bytes) -> None:
@@ -384,269 +383,237 @@ def _emit_scan(name: str, payload: dict) -> None:
 
 
 # ------------------------------------------------------------------
-# Job lifecycle — all locked
+# Job lifecycle. One board, one publish path.
 # ------------------------------------------------------------------
 
+def _halt(worker) -> None:
+    if hasattr(worker, "cancel"):
+        worker.cancel()
+    else:
+        worker.stop()
+
+
 def _stop_all_locked() -> None:
-    """Snapshot all active jobs, clear them from _state, broadcast 'idle',
-    then synchronously tear down subprocesses. Caller MUST hold _state_lock.
-    """
-    _finalize_audio_record_locked()  # save any in-progress recording first
-
-    jobs = []
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio", "replay", "iq_play", "decode_file"):
-        if _state[slot]:
-            jobs.append((slot, _state[slot]))
-
-    was_scanning = _state["mode"] == "scan"
-
-    for slot in ("streamer", "decoder", "capture", "adsb", "scanner", "radio", "scan_radio", "replay", "iq_play", "decode_file"):
-        _state[slot] = None
-    _state["mode"] = "idle"
-
-    # UI gets immediate feedback while subprocess termination happens after.
+    """Clear the current job and tear its worker down. Caller holds _state_lock."""
+    _finalize_audio_record_locked()
+    job = _jobs.clear()
     _emit_status()
-    if was_scanning:
+    if job is not None and job.kind == "scan":
         socketio.emit("scan_stopped", {})
-
-    for name, job in jobs:
-        try:
-            if hasattr(job, "cancel"):
-                job.cancel()
-            else:
-                job.stop()
-        except Exception:
-            log.exception("teardown of %s failed", name)
+    if job is None:
+        return
+    try:
+        job.stop()
+    except Exception:
+        log.exception("teardown of %s failed", job.kind)
 
 
-def _next_gen_locked() -> int:
-    """Caller MUST hold _state_lock. Returns a fresh generation id."""
-    global _current_job_gen
-    _current_job_gen += 1
-    return _current_job_gen
+def _finish_job(identity: int) -> bool:
+    """Drop the job when it is still the published one."""
+    with _state_lock:
+        job = _jobs.finish(identity)
+        if job is not None and job.kind == "radio":
+            _finalize_audio_record_locked()
+    return job is not None
 
 
-def _make_exit_handler(slot: str, gen: int, label: str):
-    """Returns an on_exit callback that only acts if it's still the
-    current generation. Avoids clobbering state when a stale subprocess
-    finishes its teardown after a new job has already taken its slot.
-    """
+def _exit_handler(identity: int, kind: str):
+    death_label = mode_spec(kind).death_label
+
     def on_exit(reason: str) -> None:
         if reason == "stopped":
-            return  # we initiated this, state is already correct
-        # "died" — subprocess exited unexpectedly
-        with _state_lock:
-            if gen != _current_job_gen:
-                return  # superseded
-            _state[slot] = None
-            _state["mode"] = "idle"
-            if slot == "radio":
-                _finalize_audio_record_locked()  # radio died mid-recording
+            return
+        if not _finish_job(identity):
+            return
         telemetry.bump("subprocess_deaths")
-        # If the device is gone, the disconnect toast covers this.
         if _device["info"] is not None:
-            _emit_toast("error", f"{label} stopped unexpectedly.")
+            _emit_toast("error", f"{death_label} stopped unexpectedly.")
         _emit_status()
     return on_exit
 
 
-def _start_sweep(cfg: SweepConfig) -> bool:
-    if _device["info"] is None:
+def _begin_job(kind: str, make):
+    """Stop the previous job, start the worker, and publish only if start() returns.
+
+    make(identity) builds the worker and does not start it. Returns
+    (True, start_value) when the job is published. start_value may be None.
+    Returns (False, None) when the device is missing or start fails. A failed
+    start leaves the board idle.
+    """
+    spec = mode_spec(kind)
+    if spec.uses_device and _device["info"] is None:
         _emit_toast("error", "Cannot start: HackRF not detected.")
-        return False
+        return False, None
     with _state_lock:
         _stop_all_locked()
-        gen = _next_gen_locked()
+        identity = _jobs.take_identity()
+        try:
+            worker = make(identity)
+        except Exception:
+            log.exception("start %s failed", kind)
+            _emit_toast("error", f"Could not start {spec.death_label.lower()}")
+            return False, None
+        try:
+            value = worker.start()
+        except Exception:
+            try:
+                _halt(worker)
+            except Exception:
+                log.exception("cleanup after failed %s start", kind)
+            log.exception("start %s failed", kind)
+            _emit_toast("error", f"Could not start {spec.death_label.lower()}")
+            return False, None
+        _jobs.publish(kind, worker, lambda w=worker: _halt(w), identity)
+    _emit_status()
+    return True, value
+
+
+def _start_sweep(cfg: SweepConfig) -> bool:
+    def make(identity: int):
         _state["sweep_config"] = cfg
-        streamer = SweepStreamer(
+        return SweepStreamer(
             cfg,
             on_sweep=_emit_sweep,
-            on_exit=_make_exit_handler("streamer", gen, "Sweep"),
+            on_exit=_exit_handler(identity, "sweep"),
         )
-        _state["streamer"] = streamer
-        _state["mode"] = "sweep"
-        streamer.start()
-    _emit_status()
-    return True
+    ok, _value = _begin_job("sweep", make)
+    return ok
 
 
 def _start_decode(cfg: DecodeConfig) -> bool:
-    if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected.")
-        return False
-    with _state_lock:
-        _stop_all_locked()
-        gen = _next_gen_locked()
+    def make(identity: int):
         _state["decode_config"] = cfg
-        decoder = Rtl433Decoder(
+        return Rtl433Decoder(
             cfg,
             on_event=_emit_event,
-            on_exit=_make_exit_handler("decoder", gen, "Decoder"),
+            on_exit=_exit_handler(identity, "decode"),
         )
-        _state["decoder"] = decoder
-        _state["mode"] = "decode"
-        decoder.start()
-    _emit_status()
-    return True
+    ok, _value = _begin_job("decode", make)
+    return ok
 
 
 def _start_capture(cfg: CaptureConfig) -> bool:
-    if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected.")
-        return False
-    with _state_lock:
-        _stop_all_locked()
-        gen = _next_gen_locked()
-        _state["capture_config"] = cfg
+    geo = _receiver_geotag()
 
-        def on_done(record, reason: str) -> None:
-            with _state_lock:
-                # Only act if we're still the current capture
-                if gen == _current_job_gen and _state["capture"] is not None:
-                    _state["capture"] = None
-                    if _state["mode"] == "capture":
-                        _state["mode"] = "idle"
-                        emit_status_after = True
-                    else:
-                        emit_status_after = False
-                else:
-                    emit_status_after = False
+    def on_done(identity: int):
+        def _on_done(record, reason: str) -> None:
+            cleared = _finish_job(identity)
             if reason == "completed":
                 size_mb = record.file_size / (1024 * 1024)
                 _emit_toast("info", f"Capture done: {record.name} ({size_mb:.1f} MB)")
             elif reason == "cancelled":
                 _emit_toast("warn", f"Capture cancelled: {record.name}")
-            else:
-                if _device["info"] is not None:
-                    _emit_toast("error", f"Capture failed: {record.name}")
+            elif _device["info"] is not None:
+                _emit_toast("error", f"Capture failed: {record.name}")
             socketio.emit("capture_done", {"record": asdict(record), "reason": reason})
             _emit_captures_list()
-            if emit_status_after:
+            if cleared:
                 _emit_status()
+        return _on_done
 
-        # Geotag the capture if GPS is enabled and holding a fresh fix; None
-        # otherwise (geotagging never blocks or fails a capture). The stored
-        # geotag is coarsened per the gps_precision privacy setting.
-        geo = _gps.geolocation()
-        if geo is not None:
-            try:
-                geo = coarsen_geolocation(geo, str(get_store().get_setting("gps_precision", "full")))
-            except Exception:
-                log.exception("coarsen geolocation failed")
-        cap = IqCapture(cfg, on_progress=_emit_capture_progress, on_done=on_done,
-                        geolocation=geo)
-        record = cap.start()
-        _state["capture"] = cap
-        _state["mode"] = "capture"
-        socketio.emit("capture_started", {"record": asdict(record)})
-    _emit_status()
+    def make(identity: int):
+        _state["capture_config"] = cfg
+        return IqCapture(
+            cfg,
+            on_progress=_emit_capture_progress,
+            on_done=on_done(identity),
+            geolocation=geo,
+        )
+
+    ok, value = _begin_job("capture", make)
+    if not ok:
+        return False
+    socketio.emit("capture_started", {"record": asdict(value)})
     return True
 
 
 def _start_adsb(cfg: AdsbConfig) -> bool:
-    if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected.")
-        return False
-    with _state_lock:
-        _stop_all_locked()
-        gen = _next_gen_locked()
+    def make(identity: int):
         _state["adsb_config"] = cfg
-        recv = AdsbReceiver(
+        return AdsbReceiver(
             cfg,
             on_update=_emit_adsb,
-            on_exit=_make_exit_handler("adsb", gen, "ADS-B"),
+            on_exit=_exit_handler(identity, "adsb"),
         )
-        _state["adsb"] = recv
-        _state["mode"] = "adsb"
-        recv.start()
-    _emit_status()
-    return True
+    ok, _value = _begin_job("adsb", make)
+    return ok
 
 
 def _start_radio(cfg: RadioConfig) -> bool:
-    if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected.")
-        return False
-    with _state_lock:
-        _stop_all_locked()
-        gen = _next_gen_locked()
+    def make(identity: int):
         _state["radio_config"] = cfg
-        recv = RadioReceiver(
+        return RadioReceiver(
             cfg,
             on_audio=_on_radio_audio,
-            on_exit=_make_exit_handler("radio", gen, "Radio"),
+            on_exit=_exit_handler(identity, "radio"),
             on_signal=lambda db: socketio.emit("radio_signal", {"dbfs": db}),
         )
-        _state["radio"] = recv
-        _state["mode"] = "radio"
-        recv.start()
+    ok, _value = _begin_job("radio", make)
+    if not ok:
+        return False
     socketio.emit(
         "radio_started",
         {"sample_rate": AUDIO_RATE, "freq_mhz": cfg.freq_mhz, "demod": cfg.demod},
     )
-    _emit_status()
     return True
 
 
 def _start_scan_radio(cfg: ScanRadioConfig) -> bool:
-    if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected.")
-        return False
     if not cfg.freqs_mhz:
         _emit_toast("error", "No marked frequencies to scan.")
         return False
-    with _state_lock:
-        _stop_all_locked()
-        gen = _next_gen_locked()
-        scanner = RadioScanner(
+
+    def make(identity: int):
+        return RadioScanner(
             cfg,
             on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
             on_event=lambda name, payload: socketio.emit(name, payload),
-            on_exit=_make_exit_handler("scan_radio", gen, "Scanner"),
+            on_exit=_exit_handler(identity, "scan_radio"),
         )
-        _state["scan_radio"] = scanner
-        _state["mode"] = "scan_radio"
-        scanner.start()
-    socketio.emit("scan_radio_started",
-                  {"count": len(cfg.freqs_mhz), "sample_rate": AUDIO_RATE, "demod": cfg.demod})
-    _emit_status()
+    ok, _value = _begin_job("scan_radio", make)
+    if not ok:
+        return False
+    socketio.emit(
+        "scan_radio_started",
+        {"count": len(cfg.freqs_mhz), "sample_rate": AUDIO_RATE, "demod": cfg.demod},
+    )
     return True
+
+
+def _capture_match(name: str):
+    return next((c for c in list_captures() if c.get("name") == name), None)
 
 
 def _start_replay(name: str) -> bool:
     if "/" in name or ".." in name:
         _emit_toast("error", "Invalid capture name")
         return False
-    match = next((c for c in list_captures() if c.get("name") == name), None)
+    match = _capture_match(name)
     if not match or not match.get("path") or not os.path.exists(match["path"]):
         _emit_toast("error", "Capture not found")
         return False
     center = int(match.get("freq_hz") or 0)
     sr = int(match.get("sample_rate") or 2_000_000)
-    with _state_lock:
-        _stop_all_locked()
-        gen = _next_gen_locked()
 
-        def on_done(reason: str) -> None:
-            with _state_lock:
-                if gen == _current_job_gen and _state["replay"] is not None:
-                    _state["replay"] = None
-                    if _state["mode"] == "replay":
-                        _state["mode"] = "idle"
+    def on_done(identity: int):
+        def _on_done(reason: str) -> None:
+            cleared = _finish_job(identity)
             socketio.emit("replay_done", {"reason": reason, "name": name})
-            _emit_status()
+            if cleared:
+                _emit_status()
+        return _on_done
 
-        rp = IqReplay(
+    def make(identity: int):
+        return IqReplay(
             match["path"], center, sr,
             on_frame=lambda f0, f1, powers: socketio.emit(
                 "sweep", {"f0": f0, "f1": f1, "powers": powers, "rate_hz": 20.0}),
-            on_done=on_done,
+            on_done=on_done(identity),
         )
-        _state["replay"] = rp
-        _state["mode"] = "replay"
-        rp.start()
+    ok, _value = _begin_job("replay", make)
+    if not ok:
+        return False
     socketio.emit("replay_started", {"name": name, "freq_hz": center, "sample_rate": sr})
-    _emit_status()
     return True
 
 
@@ -654,7 +621,7 @@ def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
     if "/" in name or ".." in name or not name.endswith(".iq"):
         _emit_toast("error", "Invalid capture")
         return False
-    match = next((c for c in list_captures() if c.get("name") == name), None)
+    match = _capture_match(name)
     if not match or not match.get("path") or not os.path.exists(match["path"]):
         _emit_toast("error", "Capture not found")
         return False
@@ -662,32 +629,27 @@ def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
         demod = "fm"
     sr = int(match.get("sample_rate") or 2_000_000)
     center = int(match.get("freq_hz") or 0)
-    with _state_lock:
-        _stop_all_locked()
-        gen = _next_gen_locked()
 
-        def on_done(reason: str) -> None:
-            with _state_lock:
-                if gen == _current_job_gen and _state["iq_play"] is not None:
-                    _state["iq_play"] = None
-                    if _state["mode"] == "iq_play":
-                        _state["mode"] = "idle"
+    def on_done(identity: int):
+        def _on_done(reason: str) -> None:
+            cleared = _finish_job(identity)
             socketio.emit("iq_play_done", {"reason": reason, "name": name})
-            _emit_status()
+            if cleared:
+                _emit_status()
+        return _on_done
 
-        player = IqAudioPlayer(
+    def make(identity: int):
+        return IqAudioPlayer(
             match["path"], sr, demod, offset_hz,
             on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
-            on_done=on_done,
+            on_done=on_done(identity),
         )
-        _state["iq_play"] = player
-        _state["mode"] = "iq_play"
-        player.start()
-    # Reuse the radio audio client path (AudioWorklet) for playback.
+    ok, _value = _begin_job("iq_play", make)
+    if not ok:
+        return False
     socketio.emit("radio_started", {"sample_rate": AUDIO_RATE, "freq_mhz": center / 1e6, "demod": demod})
     socketio.emit("iq_play_started", {"name": name, "demod": demod, "offset_hz": offset_hz,
                                       "center_hz": center, "sample_rate": sr})
-    _emit_status()
     return True
 
 
@@ -695,78 +657,57 @@ def _start_decode_file(name: str) -> bool:
     if "/" in name or ".." in name or not name.endswith(".iq"):
         _emit_toast("error", "Invalid capture")
         return False
-    match = next((c for c in list_captures() if c.get("name") == name), None)
+    match = _capture_match(name)
     if not match or not match.get("path") or not os.path.exists(match["path"]):
         _emit_toast("error", "Capture not found")
         return False
     sr = int(match.get("sample_rate") or 2_000_000)
     center = int(match.get("freq_hz") or 0)
-    with _state_lock:
-        _stop_all_locked()
-        gen = _next_gen_locked()
 
-        def on_done(reason: str) -> None:
-            with _state_lock:
-                if gen == _current_job_gen and _state["decode_file"] is not None:
-                    _state["decode_file"] = None
-                    if _state["mode"] == "decode_file":
-                        _state["mode"] = "idle"
+    def on_done(identity: int):
+        def _on_done(reason: str) -> None:
+            cleared = _finish_job(identity)
             socketio.emit("decode_file_done", {"reason": reason, "name": name})
             if reason == "completed":
                 _emit_toast("info", f"Decode finished: {name}")
-            _emit_status()
+            if cleared:
+                _emit_status()
+        return _on_done
 
-        dec = IqFileDecoder(
+    def make(identity: int):
+        return IqFileDecoder(
             match["path"], sr, center,
-            on_event=_emit_event,   # also records to the inventory
-            on_done=on_done,
+            on_event=_emit_event,
+            on_done=on_done(identity),
         )
-        _state["decode_file"] = dec
-        _state["mode"] = "decode_file"
-        dec.start()
+    ok, _value = _begin_job("decode_file", make)
+    if not ok:
+        return False
     socketio.emit("decode_file_started", {"name": name, "freq_hz": center, "sample_rate": sr})
     _emit_toast("info", f"Decoding {name} (this can take a moment)")
-    _emit_status()
     return True
 
 
 def _start_scan(cfg: ScanConfig) -> bool:
-    if _device["info"] is None:
-        _emit_toast("error", "Cannot start: HackRF not detected.")
-        return False
-    with _state_lock:
-        _stop_all_locked()
-        gen = _next_gen_locked()
-        _state["scan_config"] = cfg
-
-        def on_scan_event(name: str, payload: dict) -> None:
+    def on_scan_event(identity: int):
+        def _on_scan_event(name: str, payload: dict) -> None:
             if name in ("scan_completed", "scan_failed"):
-                with _state_lock:
-                    if gen == _current_job_gen and _state["scanner"] is not None:
-                        _state["scanner"] = None
-                        if _state["mode"] == "scan":
-                            _state["mode"] = "idle"
-                            emit_after = True
-                        else:
-                            emit_after = False
-                    else:
-                        emit_after = False
+                cleared = _finish_job(identity)
                 _emit_scan(name, payload)
-                if emit_after:
+                if cleared:
                     _emit_status()
             else:
                 _emit_scan(name, payload)
+        return _on_scan_event
 
-        scanner = AutoScanner(cfg, on_event=on_scan_event)
-        _state["scanner"] = scanner
-        _state["mode"] = "scan"
-        scanner.start()
-    _emit_status()
-    return True
+    def make(identity: int):
+        _state["scan_config"] = cfg
+        return AutoScanner(cfg, on_event=on_scan_event(identity))
+    ok, _value = _begin_job("scan", make)
+    return ok
 
 
 def _stop_all_external() -> None:
-    """Public stop entry point: lock + tear down."""
     with _state_lock:
         _stop_all_locked()
 
@@ -783,9 +724,9 @@ def _device_poller() -> None:
     while True:
         socketio.emit("telemetry", telemetry.snapshot())
         with _state_lock:
-            busy = _state["mode"] != "idle"
+            busy = _jobs.uses_device()
         if busy:
-            # A job owns the HackRF; skip the probe so hackrf_info doesn't
+            # A device job owns the HackRF; skip the probe so hackrf_info doesn't
             # contend with the running subprocess. Assume the device is present.
             time.sleep(DEVICE_POLL_INTERVAL)
             continue
@@ -854,15 +795,7 @@ def api_captures():
 @socketio.on("connect")
 def on_connect():
     with _state_lock:
-        snapshot = {
-            "mode": _state["mode"],
-            "sweep_config": asdict(_state["sweep_config"]),
-            "decode_config": asdict(_state["decode_config"]),
-            "capture_config": asdict(_state["capture_config"]),
-            "adsb_config": asdict(_state["adsb_config"]),
-            "radio_config": asdict(_state["radio_config"]),
-            "scan_config": _state["scan_config"].__dict__,
-        }
+        snapshot = _status_fields_locked()
     # Store I/O stays outside _state_lock (same rule as _emit_status): never
     # hold the state lock across SQLite calls. bookmarks/settings ride the
     # initial connect snapshot only; _emit_status() intentionally omits them.
@@ -871,11 +804,7 @@ def on_connect():
     emit("status", snapshot)
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
     emit("gps_status", _gps.position())
-    _rec = _audio_rec["record"]   # one read; another thread may finalize between reads
-    emit("audio_record_status", {
-        "recording": _audio_rec["recorder"] is not None,
-        "name": _rec.name if _rec else None,
-    })
+    emit("audio_record_status", _audio_status_snapshot())
     emit("contacts", {"data": get_store().list_contacts()})
     emit("captures", {"items": _enriched_captures()})
 
@@ -916,11 +845,7 @@ def on_start_capture(data):
     if err:
         _emit_toast("error", err)
         return
-    try:
-        _start_capture(cfg)
-    except Exception:
-        log.exception("start_capture failed")
-        _emit_toast("error", "Could not start capture")
+    _start_capture(cfg)
 
 
 @socketio.on("start_adsb")
@@ -1025,9 +950,10 @@ def on_start_scan(data):
 @socketio.on("cancel_capture")
 def on_cancel_capture():
     with _state_lock:
-        if _state["capture"]:
+        capture = _jobs.worker("capture")
+        if capture is not None:
             try:
-                _state["capture"].cancel()
+                capture.cancel()
             except Exception:
                 log.exception("cancel_capture failed")
 
@@ -1041,7 +967,7 @@ def on_stop():
 def on_snap_radio():
     """Recenter the radio on the strongest carrier near the tuned frequency."""
     with _state_lock:
-        recv = _state["radio"] if _state["mode"] == "radio" else None
+        recv = _jobs.worker("radio")
         cfg = _state["radio_config"]
     if recv is None:
         _emit_toast("error", "Snap only works while the radio is playing.")
@@ -1067,7 +993,7 @@ def on_snap_radio():
 @socketio.on("refresh_device")
 def on_refresh_device():
     with _state_lock:
-        busy = _state["mode"] != "idle"
+        busy = _jobs.uses_device()
     # Don't probe a device that a running job owns (hackrf_info would fail and
     # falsely flip the pill to "disconnected"); just re-broadcast current status.
     if not busy:
@@ -1247,7 +1173,7 @@ def on_start_audio_record(data):
     label = (data or {}).get("label", "")
     label = label[:80] if isinstance(label, str) else ""
     with _state_lock:
-        running = _state["mode"] == "radio" and _state["radio"] is not None
+        running = _jobs.worker("radio") is not None
         already = _audio_rec["recorder"] is not None
         cfg = _state["radio_config"]
     if not running:
