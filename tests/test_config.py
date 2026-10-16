@@ -6,7 +6,7 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.app import resolve_port  # noqa: E402
+from backend.app import resolve_allowed_origins, resolve_port  # noqa: E402
 
 
 def test_default_when_unset():
@@ -29,6 +29,19 @@ def test_out_of_range_falls_back():
     assert resolve_port("0") == 8765
     assert resolve_port("70000") == 8765
     assert resolve_port("-5") == 8765
+
+
+def test_unset_origins_stay_same_origin():
+    assert resolve_allowed_origins(None) is None
+    assert resolve_allowed_origins("") is None
+    assert resolve_allowed_origins("  ,  ") is None
+
+
+def test_explicit_origins_are_kept():
+    assert resolve_allowed_origins("https://a.example, https://b.example") == [
+        "https://a.example",
+        "https://b.example",
+    ]
 
 
 if __name__ == "__main__":
