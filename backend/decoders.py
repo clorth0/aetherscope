@@ -26,6 +26,12 @@ class DecodeConfig:
     gain_db: int = 32                # SoapySDR aggregated gain for HackRF
     label: str = "ISM 433"
 
+    def __post_init__(self) -> None:
+        if not (1_000_000 <= self.freq_hz <= 6_000_000_000):
+            raise ValueError("Frequency must be 1 MHz to 6 GHz")
+        if not isinstance(self.label, str) or len(self.label) > 80:
+            raise ValueError("Label must be a string of at most 80 characters")
+
 
 DecodeCallback = Callable[[dict], None]
 ExitCallback   = Callable[[str], None]   # reason: "stopped" | "died"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import shutil
 import subprocess
 import tempfile
@@ -27,11 +28,35 @@ READSB = (
 POLL_INTERVAL = 1.0
 
 
+def _optional_coord(value: float | None, low: float, high: float, label: str) -> None:
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not low <= value <= high
+    ):
+        raise ValueError(f"{label} must be {low:g} to {high:g}")
+
+
 @dataclass
 class AdsbConfig:
     gain_db: int = 32           # readsb gain in dB (0-62 for HackRF)
     rx_lat: float | None = None  # optional receiver location for distance calc
     rx_lon: float | None = None
+
+    def __post_init__(self) -> None:
+        gain = self.gain_db
+        if (
+            isinstance(gain, bool)
+            or not isinstance(gain, (int, float))
+            or not math.isfinite(gain)
+            or not 0 <= gain <= 62
+        ):
+            raise ValueError("ADS-B gain must be 0 to 62 dB")
+        _optional_coord(self.rx_lat, -90, 90, "Latitude")
+        _optional_coord(self.rx_lon, -180, 180, "Longitude")
 
 
 AircraftCallback = Callable[[list[dict], dict], None]   # (aircraft, meta)
