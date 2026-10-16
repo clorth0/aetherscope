@@ -31,6 +31,9 @@ jobs:
       - name: Check HTML templates
         run: python3 scripts/check_html_templates.py frontend/static/waterfall.js
 
+      - name: Check architecture names
+        run: python3 scripts/check_architecture_names.py
+
       - name: Check frontend JS syntax
         run: |
           fail=0
