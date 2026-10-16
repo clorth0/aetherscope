@@ -31,6 +31,16 @@ class SweepConfig:
     vga_gain: int = 20       # 0–62 in steps of 2
     amp_enable: bool = False  # 14 dB RF amp
 
+    def __post_init__(self) -> None:
+        if not (1 <= self.f_start_mhz < self.f_stop_mhz <= 6000):
+            raise ValueError(
+                f"sweep range must sit inside 1-6000 MHz, got {self.f_start_mhz}-{self.f_stop_mhz}"
+            )
+        if self.bin_width_hz < 2_000 or self.bin_width_hz > 5_000_000:
+            raise ValueError(f"bin width out of range: {self.bin_width_hz}")
+        if not (0 <= self.lna_gain <= 40):
+            raise ValueError(f"lna gain out of range: {self.lna_gain}")
+
 
 SweepCallback = Callable[[np.ndarray, np.ndarray], None]
 ExitCallback  = Callable[[str], None]   # reason: "stopped" | "died"

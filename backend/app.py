@@ -28,7 +28,7 @@ from flask_socketio import SocketIO, emit
 
 from .adsb import AdsbConfig, AdsbReceiver
 from .adsb_enrich import icao_to_registration, icao_country
-from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_config_error, delete_capture, list_captures, redact_location
+from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_basename, delete_capture, list_captures, redact_location
 from .gps import GpsClient, coarsen_geolocation
 from .audio_record import start_recording, finalize_recording
 from .decoders import DecodeConfig, Rtl433Decoder
@@ -585,7 +585,7 @@ def _capture_match(name: str):
 
 
 def _start_replay(name: str) -> bool:
-    if "/" in name or ".." in name:
+    if capture_basename(name) is None:
         _emit_toast("error", "Invalid capture name")
         return False
     match = _capture_match(name)
@@ -618,7 +618,7 @@ def _start_replay(name: str) -> bool:
 
 
 def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
-    if "/" in name or ".." in name or not name.endswith(".iq"):
+    if capture_basename(name) is None or not name.endswith(".iq"):
         _emit_toast("error", "Invalid capture")
         return False
     match = _capture_match(name)
@@ -654,7 +654,7 @@ def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
 
 
 def _start_decode_file(name: str) -> bool:
-    if "/" in name or ".." in name or not name.endswith(".iq"):
+    if capture_basename(name) is None or not name.endswith(".iq"):
         _emit_toast("error", "Invalid capture")
         return False
     match = _capture_match(name)
@@ -841,10 +841,6 @@ def on_start_capture(data):
     except (TypeError, ValueError) as e:
         _emit_toast("error", f"Invalid capture config: {e}")
         return
-    err = capture_config_error(cfg)
-    if err:
-        _emit_toast("error", err)
-        return
     _start_capture(cfg)
 
 
@@ -864,12 +860,6 @@ def on_start_radio(data):
         cfg = RadioConfig(**_filter_payload(data, RadioConfig))
     except (TypeError, ValueError) as e:
         _emit_toast("error", f"Invalid radio config: {e}")
-        return
-    if cfg.demod not in ("fm", "nfm", "am"):
-        _emit_toast("error", "Invalid demod (use fm, nfm, or am)")
-        return
-    if not (1.0 <= cfg.freq_mhz <= 6000.0):
-        _emit_toast("error", "Frequency out of range (1-6000 MHz)")
         return
     _start_radio(cfg)
 
@@ -986,7 +976,12 @@ def on_snap_radio():
         _emit_toast("info", f"No stronger signal to snap to near {cfg.freq_mhz:.3f} MHz.")
         return
     new_freq = round(cfg.freq_mhz + offset / 1_000_000.0, 4)
-    _start_radio(replace(cfg, freq_mhz=new_freq))
+    try:
+        snapped = replace(cfg, freq_mhz=new_freq)
+    except ValueError as exc:
+        _emit_toast("error", str(exc))
+        return
+    _start_radio(snapped)
     _emit_toast("success", f"Snapped to {new_freq:.3f} MHz ({offset / 1000:+.1f} kHz).")
 
 

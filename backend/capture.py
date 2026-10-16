@@ -35,6 +35,10 @@ def _slug(label: str) -> str:
     return s.strip("_") or "capture"
 
 
+CAPTURE_MAX_DURATION_S = 600.0
+_CAPTURE_SUFFIXES = (".iq", ".wav", ".json", ".sigmf-meta")
+
+
 @dataclass
 class CaptureConfig:
     freq_hz: int = 433_920_000
@@ -45,23 +49,33 @@ class CaptureConfig:
     amp_enable: bool = False
     label: str = ""
 
+    def __post_init__(self) -> None:
+        if not (0.1 <= self.duration_s <= CAPTURE_MAX_DURATION_S):
+            raise ValueError(f"Duration must be 0.1 to {int(CAPTURE_MAX_DURATION_S)} seconds")
+        if not (2_000_000 <= self.sample_rate <= 20_000_000):
+            raise ValueError("Sample rate must be 2 to 20 MSPS")
+        if not (1_000_000 <= self.freq_hz <= 6_000_000_000):
+            raise ValueError("Frequency must be 1 MHz to 6 GHz")
+        if not isinstance(self.label, str) or len(self.label) > 80:
+            raise ValueError("Label must be a string of at most 80 characters")
 
-CAPTURE_MAX_DURATION_S = 600.0
 
+def capture_basename(name: str) -> str | None:
+    """Return the capture stem, or None when the name has a separator or '..'.
 
-def capture_config_error(cfg: "CaptureConfig") -> str | None:
-    """Return a human-readable error if the capture config is out of bounds,
-    else None. Guards against accidental disk-fillers and invalid HackRF params.
+    One suffix is stripped, in the order .iq, .wav, .json, .sigmf-meta.
+    Callers still decide which suffix they accept.
     """
-    if not (0.1 <= cfg.duration_s <= CAPTURE_MAX_DURATION_S):
-        return f"Duration must be 0.1 to {int(CAPTURE_MAX_DURATION_S)} seconds"
-    if not (2_000_000 <= cfg.sample_rate <= 20_000_000):
-        return "Sample rate must be 2 to 20 MSPS"
-    if not (1_000_000 <= cfg.freq_hz <= 6_000_000_000):
-        return "Frequency must be 1 MHz to 6 GHz"
-    if not isinstance(cfg.label, str) or len(cfg.label) > 80:
-        return "Label must be a string of at most 80 characters"
-    return None
+    if not isinstance(name, str) or "/" in name or ".." in name:
+        return None
+    base = name
+    for suffix in _CAPTURE_SUFFIXES:
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    if not base or base in (".", ".."):
+        return None
+    return base
 
 
 @dataclass
@@ -256,9 +270,9 @@ def redact_location(name: str) -> bool:
     marks it redacted). Returns True if the sidecar was updated or already
     redacted. The .iq samples never contain location, so this fully removes it.
     """
-    if "/" in name or ".." in name:
+    base = capture_basename(name)
+    if base is None:
         return False
-    base = name.removesuffix(".iq").removesuffix(".wav").removesuffix(".json").removesuffix(".sigmf-meta")
     sc = CAPTURES_DIR / f"{base}.json"
     try:
         data = json.loads(sc.read_text())
@@ -285,9 +299,9 @@ def redact_location(name: str) -> bool:
 
 def delete_capture(name: str) -> bool:
     """Delete a capture .iq + sidecar by base filename."""
-    if "/" in name or ".." in name:
+    base = capture_basename(name)
+    if base is None:
         return False
-    base = name.removesuffix(".iq").removesuffix(".wav").removesuffix(".json").removesuffix(".sigmf-meta")
     iq = CAPTURES_DIR / f"{base}.iq"
     wav = CAPTURES_DIR / f"{base}.wav"
     sc = CAPTURES_DIR / f"{base}.json"

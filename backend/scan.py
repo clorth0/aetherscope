@@ -13,6 +13,7 @@ sequentially so they don't fight over the HackRF.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from collections import defaultdict
@@ -71,6 +72,28 @@ def classify_band(hz: float) -> tuple[str, str | None]:
 # ------------------------------------------------------------------
 # Phase configuration
 # ------------------------------------------------------------------
+def _positive_seconds(value: float, label: str) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"{label} must be a positive finite number")
+
+
+def _optional_coord(value: float | None, low: float, high: float, label: str) -> None:
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not low <= value <= high
+    ):
+        raise ValueError(f"{label} must be {low:g} to {high:g}")
+
+
 @dataclass
 class ScanConfig:
     sweep_seconds: float = 12.0
@@ -79,6 +102,13 @@ class ScanConfig:
     peak_threshold_db: float = 15.0   # above noise floor
     rx_lat: float | None = None
     rx_lon: float | None = None
+
+    def __post_init__(self) -> None:
+        _positive_seconds(self.sweep_seconds, "sweep_seconds")
+        _positive_seconds(self.rtl433_seconds, "rtl433_seconds")
+        _positive_seconds(self.adsb_seconds, "adsb_seconds")
+        _optional_coord(self.rx_lat, -90, 90, "Latitude")
+        _optional_coord(self.rx_lon, -180, 180, "Longitude")
 
 
 @dataclass

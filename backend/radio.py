@@ -162,6 +162,12 @@ class RadioConfig:
     amp_enable: bool = False      # 14 dB RF amp
     sample_rate_hz: int = FS_IN
 
+    def __post_init__(self) -> None:
+        if self.demod not in ("fm", "nfm", "am"):
+            raise ValueError("Invalid demod (use fm, nfm, or am)")
+        if not (1.0 <= self.freq_mhz <= 6000.0):
+            raise ValueError("Frequency out of range (1-6000 MHz)")
+
 
 AudioCallback = Callable[[bytes], None]
 SignalCallback = Callable[[float], None]  # channel power in dBFS
