@@ -424,6 +424,27 @@ function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Markup the caller already built. The html tag inserts this as-is.
+function raw(markup) {
+  return { __html: String(markup) };
+}
+
+// Escapes every value. Pass raw() only for markup built by html``.
+function html(strings, ...values) {
+  let out = "";
+  strings.forEach((part, i) => {
+    out += part;
+    if (i >= values.length) return;
+    const value = values[i];
+    if (value && typeof value === "object" && Object.hasOwn(value, "__html")) {
+      out += value.__html;
+      return;
+    }
+    out += escapeHtml(value ?? "");
+  });
+  return out;
+}
+
 function summarizeFields(ev) {
   // Skip noisy metadata, surface useful KV pairs
   const skip = new Set(["time", "model", "freq", "freq1", "freq2", "rssi", "snr", "noise", "mod"]);
@@ -431,7 +452,7 @@ function summarizeFields(ev) {
   for (const [k, v] of Object.entries(ev)) {
     if (skip.has(k)) continue;
     if (v === null || v === undefined) continue;
-    parts.push(`<span class="k">${escapeHtml(k)}=</span><span class="v">${escapeHtml(v)}</span>`);
+    parts.push(html`<span class="k">${k}=</span><span class="v">${v}</span>`);
     if (parts.length >= 6) break;
   }
   return parts.join("  ");
@@ -439,7 +460,7 @@ function summarizeFields(ev) {
 
 function renderEvents() {
   if (events.length === 0) {
-    eventListEl.innerHTML = `<div class="event-empty">No events yet. Hit <strong>Start Decoder</strong> in the sidebar to begin.</div>`;
+    eventListEl.innerHTML = html`<div class="event-empty">No events yet. Hit <strong>Start Decoder</strong> in the sidebar to begin.</div>`;
     return;
   }
   const filtered = events.filter(eventMatchesFilter);
@@ -449,10 +470,10 @@ function renderEvents() {
     const fields = summarizeFields(ev);
     const rssi = typeof ev.rssi_db === "number"
       ? `${ev.rssi_db.toFixed(0)} dB`
-      : (ev.rssi != null ? escapeHtml(String(ev.rssi)) : "");   // RF-derived: escape
-    return `<div class="event-row">
+      : (ev.rssi != null ? String(ev.rssi) : "");
+    return html`<div class="event-row">
       <span class="event-time">${time}</span>
-      <span><span class="event-model">${escapeHtml(model)}</span> <span class="event-fields">${fields}</span></span>
+      <span><span class="event-model">${model}</span> <span class="event-fields">${raw(fields)}</span></span>
       <span class="event-rssi">${rssi}</span>
     </div>`;
   });
@@ -1262,7 +1283,7 @@ function fmtAgo(ts) {
 
 function renderCaptures() {
   if (!captures.length) {
-    capturesListEl.innerHTML = `<div class="event-empty">No captures yet. Configure in the sidebar and hit Record.</div>`;
+    capturesListEl.innerHTML = html`<div class="event-empty">No captures yet. Configure in the sidebar and hit Record.</div>`;
     return;
   }
   const filtered = captures.filter(c => {
@@ -1271,49 +1292,50 @@ function renderCaptures() {
     return blob.includes(capFilter);
   });
   capturesListEl.innerHTML = filtered.map(c => {
-    const displayName = escapeHtml(c.user_label || c.label || c.name);
+    const displayName = c.user_label || c.label || c.name;
     const tags = Array.isArray(c.tags) ? c.tags : [];
     const tagsHtml = tags.length
-      ? tags.map(t => `<span class="bm-tag">${escapeHtml(t)}</span>`).join(" ")
+      ? tags.map(t => html`<span class="bm-tag">${t}</span>`).join(" ")
       : "";
-    const missingBadge = c.missing ? `<span class="cap-missing-badge">missing</span>` : "";
+    const tagsBlock = tagsHtml ? html`<div class="cap-tags">${raw(tagsHtml)}</div>` : "";
+    const missingBadge = c.missing ? html`<span class="cap-missing-badge">missing</span>` : "";
     const geo = c.geolocation;
     const hasGeo = geo && typeof geo.lat === "number" && typeof geo.lon === "number";
     const geoBadge = hasGeo
-      ? `<span class="cap-geo-badge" title="lat ${geo.lat.toFixed(6)}, lon ${geo.lon.toFixed(6)}">located</span>`
-      : (c.geolocation_redacted ? `<span class="cap-geo-badge redacted">location removed</span>` : "");
-    const redactBtn = hasGeo ? `<button data-redact="${escapeHtml(c.name)}">Remove location</button>` : "";
+      ? html`<span class="cap-geo-badge" title="lat ${geo.lat.toFixed(6)}, lon ${geo.lon.toFixed(6)}">located</span>`
+      : (c.geolocation_redacted ? html`<span class="cap-geo-badge redacted">location removed</span>` : "");
+    const redactBtn = hasGeo ? html`<button data-redact="${c.name}">Remove location</button>` : "";
     const isAudio = c.kind === "audio";
-    const kindBadge = isAudio ? `<span class="cap-kind-badge">audio</span>` : "";
+    const kindBadge = isAudio ? html`<span class="cap-kind-badge">audio</span>` : "";
     const sigmfName = (!isAudio && c.name.endsWith(".iq")) ? c.name.slice(0, -3) + ".sigmf-meta" : "";
     const sigmfLink = (c.sigmf && sigmfName)
-      ? `<a href="/captures/${encodeURIComponent(sigmfName)}" download title="SigMF metadata (portable to other SDR tools)">SigMF</a>`
+      ? html`<a href="/captures/${encodeURIComponent(sigmfName)}" download title="SigMF metadata (portable to other SDR tools)">SigMF</a>`
       : "";
     const dur = (c.duration_s || 0).toFixed(1);
     const detail = isAudio
-      ? `${fmtMHz(c.freq_hz)}<span class="sep">·</span>${escapeHtml((c.demod || "").toUpperCase())}<span class="sep">·</span>${dur}s<span class="sep">·</span>${fmtBytes(c.file_size)}`
-      : `${fmtMHz(c.freq_hz)}<span class="sep">·</span>${fmtMSps(c.sample_rate)}<span class="sep">·</span>${dur}s<span class="sep">·</span>${fmtBytes(c.file_size)}`;
+      ? html`${fmtMHz(c.freq_hz)}<span class="sep">·</span>${(c.demod || "").toUpperCase()}<span class="sep">·</span>${dur}s<span class="sep">·</span>${fmtBytes(c.file_size)}`
+      : html`${fmtMHz(c.freq_hz)}<span class="sep">·</span>${fmtMSps(c.sample_rate)}<span class="sep">·</span>${dur}s<span class="sep">·</span>${fmtBytes(c.file_size)}`;
     const metaTail = isAudio
       ? (c.audio_rate ? `audio ${Math.round(c.audio_rate / 1000)} kHz` : "audio")
-      : escapeHtml(c.sample_format || "");
+      : (c.sample_format || "");
     const playOrReplay = isAudio
-      ? `<button data-play="${escapeHtml(c.name)}">Play</button>`
-      : `<button data-replay="${escapeHtml(c.name)}">Replay</button> <button data-listen="${escapeHtml(c.name)}">Listen</button> <button data-decode-file="${escapeHtml(c.name)}">Decode</button>`;
-    return `
+      ? html`<button data-play="${c.name}">Play</button>`
+      : html`<button data-replay="${c.name}">Replay</button> <button data-listen="${c.name}">Listen</button> <button data-decode-file="${c.name}">Decode</button>`;
+    return html`
     <div class="cap-row">
       <div class="cap-main">
-        <div class="cap-name">${displayName}${kindBadge}${missingBadge}${geoBadge}</div>
-        ${tagsHtml ? `<div class="cap-tags">${tagsHtml}</div>` : ""}
-        <div class="cap-detail">${detail}</div>
-        <div class="cap-meta">${escapeHtml(c.name)} · ${fmtAgo(c.started_at)} · ${metaTail}</div>
+        <div class="cap-name">${displayName}${raw(kindBadge)}${raw(missingBadge)}${raw(geoBadge)}</div>
+        ${raw(tagsBlock)}
+        <div class="cap-detail">${raw(detail)}</div>
+        <div class="cap-meta">${c.name} · ${fmtAgo(c.started_at)} · ${metaTail}</div>
       </div>
       <div class="cap-actions">
         <a href="/captures/${encodeURIComponent(c.name)}" download>Download</a>
-        ${sigmfLink}
-        <button data-edit="${escapeHtml(c.name)}">Edit</button>
-        ${playOrReplay}
-        ${redactBtn}
-        <button class="danger" data-delete="${escapeHtml(c.name)}">Delete</button>
+        ${raw(sigmfLink)}
+        <button data-edit="${c.name}">Edit</button>
+        ${raw(playOrReplay)}
+        ${raw(redactBtn)}
+        <button class="danger" data-delete="${c.name}">Delete</button>
       </div>
     </div>
   `;
@@ -1530,7 +1552,7 @@ function acColor(hex) {
 function planeIcon(track, color) {
   const angle = (Number.isFinite(Number(track)) ? Number(track) : 0).toFixed(0);
   const c = color || "#4dd0e1";
-  const svg = `
+  const svg = html`
     <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
          style="transform: rotate(${angle}deg); filter: drop-shadow(0 0 3px ${c});">
       <path d="M12 2 L14.5 12 L22 14 L14 16 L12 22 L10 16 L2 14 L9.5 12 Z"
@@ -1583,10 +1605,10 @@ function renderAircraftList() {
   const list = document.getElementById("aircraft-list");
   const filtered = adsbAircraft.filter(aircraftMatchesFilter);
   if (!adsbAircraft.length) {
-    list.innerHTML = `<div class="event-empty">No aircraft yet. Start ADS-B in the sidebar.</div>`;
+    list.innerHTML = html`<div class="event-empty">No aircraft yet. Start ADS-B in the sidebar.</div>`;
     return;
   }
-  const header = `<div class="aircraft-header">
+  const header = html`<div class="aircraft-header">
     <span>Hex</span><span>Flight</span><span>Alt (ft)</span>
     <span>Speed</span><span>Track</span><span>Position</span><span>RSSI</span>
   </div>`;
@@ -1594,9 +1616,9 @@ function renderAircraftList() {
     .sort((a, b) => (a.seen || 0) - (b.seen || 0))
     .map(a => {
       const hasPos = a.lat != null && a.lon != null;
-      return `<div class="ac-row ${hasPos ? "" : "no-pos"}">
-        <span class="ac-hex">${escapeHtml((a.hex || "").toUpperCase())}</span>
-        <span class="ac-flight">${escapeHtml((a.flight || "").trim() || "—")}</span>
+      return html`<div class="ac-row ${hasPos ? "" : "no-pos"}">
+        <span class="ac-hex">${(a.hex || "").toUpperCase()}</span>
+        <span class="ac-flight">${(a.flight || "").trim() || "—"}</span>
         <span class="ac-alt">${fmtAlt(a.alt_baro)}</span>
         <span class="ac-spd">${fmtKnots(a.gs)}</span>
         <span class="ac-track">${fmtTrack(a.track)}</span>
@@ -1664,13 +1686,14 @@ function updateAdsbMap(aircraft, meta) {
     if (rx) {
       const d = haversineNm(rx[0], rx[1], a.lat, a.lon);
       if (d > maxRangeNm) maxRangeNm = d;
-      distStr = `Range: ${d.toFixed(0)} nm @ ${bearingDeg(rx[0], rx[1], a.lat, a.lon).toFixed(0)}&deg;<br>`;
+      distStr = html`Range: ${d.toFixed(0)} nm @ ${bearingDeg(rx[0], rx[1], a.lat, a.lon).toFixed(0)}&deg;<br>`;
     }
-    const reg = a.registration ? `Reg: ${escapeHtml(a.registration)}<br>` : "";
-    const country = a.country ? `${escapeHtml(a.country)}<br>` : "";
-    const popup = `<b>${escapeHtml(flight || a.hex.toUpperCase())}</b><br>
-      ${flight ? escapeHtml(a.hex.toUpperCase()) + "<br>" : ""}
-      ${reg}${country}${distStr}
+    const reg = a.registration ? html`Reg: ${a.registration}<br>` : "";
+    const country = a.country ? html`${a.country}<br>` : "";
+    const hexLine = flight ? html`${a.hex.toUpperCase()}<br>` : "";
+    const popup = html`<b>${flight || a.hex.toUpperCase()}</b><br>
+      ${raw(hexLine)}
+      ${raw(reg)}${raw(country)}${raw(distStr)}
       Alt: ${fmtAlt(a.alt_baro)} ft<br>
       Speed: ${fmtKnots(a.gs)} kts<br>
       Track: ${fmtTrack(a.track)}<br>
@@ -1838,7 +1861,7 @@ function applyScanConfigToInputs(c) {
 document.getElementById("btn-start-scan").addEventListener("click", (e) => {
   flashClick(e.currentTarget, "start_scan");
   resetPhases();
-  scanResultsEl.innerHTML = `<div class="event-empty">Scanning… results will appear here phase by phase.</div>`;
+  scanResultsEl.innerHTML = html`<div class="event-empty">Scanning… results will appear here phase by phase.</div>`;
   scanFindings = {};
   socket.emit("start_scan", readScanConfig());
 });
@@ -1865,11 +1888,11 @@ socket.on("scan_completed", (s) => {
   renderScanResults(true, scanFindings, s);
 });
 socket.on("scan_failed", () => {
-  scanResultsEl.innerHTML = `<div class="event-empty">Scan failed.</div>`;
+  scanResultsEl.innerHTML = html`<div class="event-empty">Scan failed.</div>`;
 });
 socket.on("scan_stopped", () => {
   resetPhases();
-  scanResultsEl.innerHTML = `<div class="event-empty">Scan stopped. Hit Start Scan to run again.</div>`;
+  scanResultsEl.innerHTML = html`<div class="event-empty">Scan stopped. Hit Start Scan to run again.</div>`;
 });
 
 function fmtFreqHz(hz) {
@@ -1887,7 +1910,7 @@ function summarizeDeviceFields(d) {
   for (const [k, v] of Object.entries(d)) {
     if (skip.has(k)) continue;
     if (v == null) continue;
-    parts.push(`${escapeHtml(k)}=${escapeHtml(v)}`);
+    parts.push(`${k}=${v}`);
     if (parts.length >= 5) break;
   }
   return parts.join("  ");
@@ -1898,7 +1921,7 @@ function renderScanResults(isFinal, findings, summary) {
 
   if (isFinal && summary?.summary) {
     const s = summary.summary;
-    sections.push(`<div class="scan-summary">
+    sections.push(html`<div class="scan-summary">
       <div><div class="num">${s.peak_count}</div><span class="lbl">Spectrum peaks</span></div>
       <div><div class="num">${s.ism_433_devices}</div><span class="lbl">ISM 433 devices</span></div>
       <div><div class="num">${s.ism_915_devices}</div><span class="lbl">ISM 915 devices</span></div>
@@ -1906,56 +1929,68 @@ function renderScanResults(isFinal, findings, summary) {
     </div>`);
   }
 
-  // Peaks
   const peaks = findings.sweep?.peaks || [];
-  sections.push(`<div class="scan-section">
-    <h3>Spectrum Peaks (${peaks.length})</h3>
-    ${peaks.length === 0
-      ? `<div class="empty">No peaks above threshold yet.</div>`
-      : peaks.map(p => `
+  const peakRows = peaks.map(p => {
+    const hint = p.decoder_hint
+      ? html` <span class="hint-dec">→ ${p.decoder_hint}</span>`
+      : "";
+    const snr = typeof p.snr_db === "number" ? p.snr_db.toFixed(1) : "—";
+    const peak = typeof p.peak_db === "number" ? p.peak_db.toFixed(1) : "—";
+    return html`
         <div class="peak-row">
           <span class="freq">${fmtFreqHz(p.center_hz)}</span>
-          <span class="band">${escapeHtml(p.band || "")}${p.decoder_hint ? ` <span class="hint-dec">→ ${escapeHtml(p.decoder_hint)}</span>` : ""}</span>
-          <span class="snr">${typeof p.snr_db === "number" ? p.snr_db.toFixed(1) : "—"} dB</span>
-          <span class="snr">${typeof p.peak_db === "number" ? p.peak_db.toFixed(1) : "—"} dBFS</span>
-        </div>`).join("")
-    }
+          <span class="band">${p.band || ""}${raw(hint)}</span>
+          <span class="snr">${snr} dB</span>
+          <span class="snr">${peak} dBFS</span>
+        </div>`;
+  }).join("");
+  const peakBody = peaks.length === 0
+    ? html`<div class="empty">No peaks above threshold yet.</div>`
+    : peakRows;
+  sections.push(html`<div class="scan-section">
+    <h3>Spectrum Peaks (${peaks.length})</h3>
+    ${raw(peakBody)}
   </div>`);
 
-  // ISM 433 devices
   for (const key of ["rtl433_433", "rtl433_915"]) {
     const phase = findings[key];
     const devices = phase?.devices || [];
     const label = key === "rtl433_433" ? "ISM 433 Devices" : "ISM 915 Devices";
-    sections.push(`<div class="scan-section">
-      <h3>${label} (${devices.length})</h3>
-      ${devices.length === 0
-        ? `<div class="empty">No devices decoded.</div>`
-        : devices.map(d => `
+    const deviceRows = devices.map(d => html`
           <div class="scan-device-row">
-            <span class="model">${escapeHtml(d.model || "unknown")}</span>
+            <span class="model">${d.model || "unknown"}</span>
             <span class="fields">${summarizeDeviceFields(d)}</span>
             <span class="count">×${d._count}</span>
-          </div>`).join("")
-      }
+          </div>`).join("");
+    const deviceBody = devices.length === 0
+      ? html`<div class="empty">No devices decoded.</div>`
+      : deviceRows;
+    sections.push(html`<div class="scan-section">
+      <h3>${label} (${devices.length})</h3>
+      ${raw(deviceBody)}
     </div>`);
   }
 
-  // Aircraft
   const aircraft = findings.adsb?.aircraft || [];
-  sections.push(`<div class="scan-section">
-    <h3>Aircraft (${aircraft.length})</h3>
-    ${aircraft.length === 0
-      ? `<div class="empty">No aircraft tracked.</div>`
-      : aircraft.map(a => `
+  const aircraftRows = aircraft.map(a => {
+    const alt = a.alt_baro != null ? `${a.alt_baro} ft` : "—";
+    const spd = a.gs != null ? `${Math.round(a.gs)} kts` : "—";
+    const pos = a.lat != null ? `${a.lat.toFixed(3)}, ${a.lon.toFixed(3)}` : "no position";
+    return html`
         <div class="scan-ac-row">
-          <span class="hex">${escapeHtml((a.hex || "").toUpperCase())}</span>
-          <span class="flight">${escapeHtml((a.flight || "").trim() || "—")}</span>
-          <span class="alt">${a.alt_baro != null ? a.alt_baro + " ft" : "—"}</span>
-          <span class="spd">${a.gs != null ? Math.round(a.gs) + " kts" : "—"}</span>
-          <span class="pos">${a.lat != null ? a.lat.toFixed(3) + ", " + a.lon.toFixed(3) : "no position"}</span>
-        </div>`).join("")
-    }
+          <span class="hex">${(a.hex || "").toUpperCase()}</span>
+          <span class="flight">${(a.flight || "").trim() || "—"}</span>
+          <span class="alt">${alt}</span>
+          <span class="spd">${spd}</span>
+          <span class="pos">${pos}</span>
+        </div>`;
+  }).join("");
+  const aircraftBody = aircraft.length === 0
+    ? html`<div class="empty">No aircraft tracked.</div>`
+    : aircraftRows;
+  sections.push(html`<div class="scan-section">
+    <h3>Aircraft (${aircraft.length})</h3>
+    ${raw(aircraftBody)}
   </div>`);
 
   scanResultsEl.innerHTML = sections.join("");
@@ -2083,21 +2118,25 @@ function renderBookmarks() {
     return labelText.includes(q) || freqText.includes(q) || tagsText.includes(q);
   });
   if (!filtered.length) {
-    listEl.innerHTML = `<div class="event-empty">${bookmarks.length ? "No bookmarks match the filter." : "No bookmarks yet. Tune to a frequency and click + Add."}</div>`;
+    const empty = bookmarks.length
+      ? "No bookmarks match the filter."
+      : "No bookmarks yet. Tune to a frequency and click + Add.";
+    listEl.innerHTML = html`<div class="event-empty">${empty}</div>`;
     return;
   }
   const rows = filtered.map(bm => {
-    const label = escapeHtml(bm.label || "");
-    const freq  = escapeHtml(fmtBookmarkFreq(bm.freq_hz));
-    const demod = escapeHtml((bm.demod || "fm").toUpperCase());
-    const tags  = (bm.tags || []).map(t => `<span class="bm-tag">${escapeHtml(t)}</span>`).join(" ");
+    const label = bm.label || "";
+    const freq  = fmtBookmarkFreq(bm.freq_hz);
+    const demod = (bm.demod || "fm").toUpperCase();
+    const tags  = (bm.tags || []).map(t => html`<span class="bm-tag">${t}</span>`).join(" ");
+    const tagsBlock = tags ? html`<span class="bm-tags">${raw(tags)}</span>` : "";
     const id    = String(Number(bm.id));  // numeric-only; safe in data-id attributes
-    return `<div class="bm-row" data-id="${id}">
+    return html`<div class="bm-row" data-id="${id}">
       <div class="bm-main">
         <span class="bm-label">${label}</span>
         <span class="bm-freq">${freq}</span>
         <span class="bm-demod">${demod}</span>
-        ${tags ? `<span class="bm-tags">${tags}</span>` : ""}
+        ${raw(tagsBlock)}
       </div>
       <div class="bm-actions">
         <button class="btn ghost small bm-tune" data-id="${id}" title="Tune and listen">Tune</button>
@@ -2312,7 +2351,7 @@ function infoSummary(info) {
 function renderInventory() {
   if (!inventoryListEl) return;
   if (!contacts.length) {
-    inventoryListEl.innerHTML = `<div class="event-empty">No contacts yet. Run ADS-B or Decode to populate the inventory.</div>`;
+    inventoryListEl.innerHTML = html`<div class="event-empty">No contacts yet. Run ADS-B or Decode to populate the inventory.</div>`;
     return;
   }
   const filtered = contacts.filter(c => {
@@ -2320,21 +2359,21 @@ function renderInventory() {
     const blob = `${c.label} ${c.ident} ${c.kind} ${(c.info && c.info.country) || ""}`.toLowerCase();
     return blob.includes(invFilter);
   });
-  const header = `<div class="inv-header">
+  const header = html`<div class="inv-header">
     <span>Kind</span><span>Label</span><span>Ident</span><span>Info</span>
     <span>Count</span><span>First</span><span>Last</span><span>Location</span>
   </div>`;
   const rows = filtered.map(c => {
     const loc = (c.lat != null && c.lon != null) ? `${c.lat.toFixed(3)}, ${c.lon.toFixed(3)}` : "—";
-    return `<div class="inv-row">
-      <span class="inv-kind ${escapeHtml(c.kind)}">${escapeHtml(c.kind)}</span>
-      <span>${escapeHtml(c.label || "")}</span>
-      <span class="mono">${escapeHtml(String(c.ident || ""))}</span>
-      <span class="inv-info">${escapeHtml(infoSummary(c.info))}</span>
+    return html`<div class="inv-row">
+      <span class="inv-kind ${c.kind}">${c.kind}</span>
+      <span>${c.label || ""}</span>
+      <span class="mono">${String(c.ident || "")}</span>
+      <span class="inv-info">${infoSummary(c.info)}</span>
       <span>${c.count}</span>
       <span>${fmtAgo(c.first_seen)}</span>
       <span>${fmtAgo(c.last_seen)}</span>
-      <span class="mono">${escapeHtml(loc)}</span>
+      <span class="mono">${loc}</span>
     </div>`;
   }).join("");
   inventoryListEl.innerHTML = header + rows;
