@@ -35,8 +35,9 @@ const paneRadio   = document.getElementById("pane-radio");
 const viewInventory = document.getElementById("view-inventory");
 
 let currentMode    = "sweep";       // UI tab (sweep | decode | capture | adsb | scan)
-let serverMode     = "idle";        // backend mode (idle | sweep | decode | capture | adsb | scan)
-let prevServerMode = "idle";        // last seen serverMode — used to detect transitions
+let serverMode     = "idle";
+let serverStatusLabel = "Idle";
+let prevServerMode = "idle";
 let lastSweep    = null;
 let maxHoldOn    = false;
 let avgOn        = false;
@@ -473,14 +474,7 @@ function refreshStatusUI() {
   const running = serverMode !== "idle";
   statusDot.classList.toggle("running", running);
   statusDot.classList.toggle("stopped", !running);
-  if (serverMode === "sweep") statusText.textContent = "Sweeping";
-  else if (serverMode === "decode") statusText.textContent = "Decoding";
-  else if (serverMode === "capture") statusText.textContent = "Recording";
-  else if (serverMode === "adsb") statusText.textContent = "Tracking";
-  else if (serverMode === "scan") statusText.textContent = "Auto-Scanning";
-  else if (serverMode === "scan_radio") statusText.textContent = "Scanning";
-  else if (serverMode === "replay") statusText.textContent = "Replaying";
-  else statusText.textContent = "Idle";
+  statusText.textContent = serverStatusLabel;
   if (serverMode !== "sweep") sweepRateEl.textContent = "0.0 Hz";
   const scanBtn = document.getElementById("btn-scan-radio");
   if (scanBtn) {
@@ -616,6 +610,7 @@ let _settingsRestored = false;
 
 socket.on("status", (s) => {
   serverMode = s.mode || "idle";
+  serverStatusLabel = s.status_label || (serverMode === "idle" ? "Idle" : serverMode);
   if (s.sweep_config) applySweepConfigToInputs(s.sweep_config);
   if (s.decode_config) applyDecodeConfigToInputs(s.decode_config);
   if (s.capture_config) applyCaptureConfigToInputs(s.capture_config);
