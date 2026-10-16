@@ -74,9 +74,14 @@ app.secret_key = os.environ.get("AETHERSCOPE_SECRET_KEY") or secrets.token_hex(3
 # Same-origin only by default. To run behind a reverse proxy on a different
 # hostname, set AETHERSCOPE_ALLOWED_ORIGINS to a comma-separated list of the
 # exact origins the browser uses, e.g. "https://aetherscope.example.com".
-_allowed_origins = [
-    o.strip() for o in os.environ.get("AETHERSCOPE_ALLOWED_ORIGINS", "").split(",") if o.strip()
-] or None
+def resolve_allowed_origins(raw: str | None) -> list[str] | None:
+    if not raw or not raw.strip():
+        return None
+    origins = [part.strip() for part in raw.split(",") if part.strip()]
+    return origins or None
+
+
+_allowed_origins = resolve_allowed_origins(os.environ.get("AETHERSCOPE_ALLOWED_ORIGINS"))
 # When unset, `None` makes engine.io enforce the request's own origin (same-origin
 # only). An empty list would instead DISABLE the origin check, letting any page in
 # the browser drive the SDR over the websocket, so default to None.

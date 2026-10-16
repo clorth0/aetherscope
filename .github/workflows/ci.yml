@@ -19,12 +19,18 @@ jobs:
 
       - name: Run tests (hardware-free, synthetic)
         run: |
-          uv run python tests/test_sweep.py
-          uv run python tests/test_radio.py
-          uv run python tests/test_bands.py
-          uv run python tests/test_capture.py
+          fail=0
+          for f in tests/test_*.py; do
+            echo "=== $f ==="
+            uv run python "$f" || fail=1
+          done
+          exit "$fail"
 
       - name: Check frontend JS syntax
         run: |
-          node --check frontend/static/waterfall.js
-          node --check frontend/static/radio-audio-worklet.js
+          fail=0
+          for f in frontend/static/*.js; do
+            echo "=== $f ==="
+            node --check "$f" || fail=1
+          done
+          exit "$fail"
