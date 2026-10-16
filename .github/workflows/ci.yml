@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -25,6 +27,9 @@ jobs:
             uv run python "$f" || fail=1
           done
           exit "$fail"
+
+      - name: Check HTML templates
+        run: python3 scripts/check_html_templates.py frontend/static/waterfall.js
 
       - name: Check frontend JS syntax
         run: |
