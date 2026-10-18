@@ -30,6 +30,7 @@ from .adsb import AdsbConfig, AdsbReceiver
 from .adsb_enrich import icao_to_registration, icao_country
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_basename, delete_capture, list_captures, redact_location
 from .catalogue import find_capture, list_catalogue
+from .contacts import SightingThrottle, adsb_sighting, ism_sighting
 from .gps import GpsClient, coarsen_geolocation
 from .audio_record import start_recording, finalize_recording
 from .decoders import DecodeConfig, Rtl433Decoder
@@ -199,9 +200,8 @@ def _emit_sweep(freqs: np.ndarray, powers: np.ndarray) -> None:
     )
 
 
-_contact_write_ts: dict = {}     # key -> last DB write time (throttle)
+_contact_throttle = SightingThrottle(2.0)  # per-key DB write window (contacts.py)
 _contact_emit_ts = [0.0]         # last 'contacts' broadcast time
-_CONTACT_WRITE_DT = 2.0
 _CONTACT_EMIT_DT = 3.0
 
 
@@ -212,14 +212,15 @@ def _emit_contacts() -> None:
         log.exception("emit contacts failed")
 
 
-def _record_contact(key, kind, label, ident="", info=None, lat=None, lon=None) -> None:
+def _record_contact(sighting) -> None:
     """Throttled upsert of a contact sighting into the persistent inventory."""
     now = time.time()
-    if now - _contact_write_ts.get(key, 0.0) < _CONTACT_WRITE_DT:
+    if not _contact_throttle.register(sighting.key, now):
         return
-    _contact_write_ts[key] = now
     try:
-        get_store().record_contact(int(now), key, kind, label, ident, info, lat, lon)
+        get_store().record_contact(int(now), sighting.key, sighting.kind,
+                                   sighting.label, sighting.ident, sighting.info,
+                                   sighting.lat, sighting.lon)
     except Exception:
         log.exception("record_contact failed")
         return
@@ -241,15 +242,12 @@ def _receiver_geotag():
 
 def _emit_event(event: dict) -> None:
     socketio.emit("decoded", event)
-    model = event.get("model")
-    if not model:
+    sighting = ism_sighting(event)
+    if sighting is None:
         return
-    ident = str(event.get("id", event.get("channel", "")))
-    info = {k: event[k] for k in ("channel", "battery_ok", "temperature_C",
-                                  "humidity", "freq", "rssi") if k in event}
     geo = _receiver_geotag()
-    _record_contact(f"ism:{model}:{ident}", "ism", str(model), ident=ident, info=info,
-                    lat=(geo or {}).get("lat"), lon=(geo or {}).get("lon"))
+    _record_contact(replace(sighting, lat=(geo or {}).get("lat"),
+                            lon=(geo or {}).get("lon")))
 
 
 def _status_fields_locked() -> dict:
@@ -378,12 +376,9 @@ def _emit_adsb(aircraft: list[dict], meta: dict) -> None:
         country = icao_country(hx)
         if country:
             a["country"] = country
-        label = (a.get("flight") or "").strip() or reg or hx.upper()
-        info = {k: v for k, v in {"registration": reg, "country": country,
-                                  "alt": a.get("alt_baro"), "gs": a.get("gs")}.items()
-                if v is not None}
-        _record_contact(f"adsb:{hx}", "adsb", label, ident=hx, info=info,
-                        lat=a.get("lat"), lon=a.get("lon"))
+        sighting = adsb_sighting(a, registration=reg, country=country)
+        if sighting is not None:
+            _record_contact(sighting)
     socketio.emit("adsb", {"aircraft": aircraft, "meta": meta})
 
 
@@ -1179,7 +1174,7 @@ def on_clear_inventory(data=None):
     except Exception as e:
         _emit_toast("error", str(e))
         return
-    _contact_write_ts.clear()
+    _contact_throttle.clear()
     _emit_contacts()
     _emit_toast("info", f"Cleared {n} contacts")
 
