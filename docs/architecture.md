@@ -38,6 +38,14 @@
   writes a companion `<base>.sigmf-meta` (SigMF 1.0.0) referencing the `.iq` via
   `core:dataset`, so recordings are portable to other SDR tools. Any geotag rides
   in `core:geolocation` (GeoJSON Point) and is scrubbed by redaction.
+- **Capture catalogue.** `catalogue.py` is the deep module behind the capture
+  list: typed `IqCaptureEntry` / `AudioCaptureEntry` records (two shapes —
+  IQ has sample rate/format and a SigMF companion, audio has demod/audio
+  rate and none), one SigMF-name derivation, one slug, and sidecar
+  listing/lookup/delete/redact. Callers get a capture ready to replay,
+  play, or decode; the raw sidecar dict crosses no seam. Its `to_dict()`
+  reproduces the sidecar exactly; the only server-added field in the
+  enriched list is the derived `sigmf_name`.
 - **Closing the loop.** Live radio audio can be recorded to WAV
   (`audio_record.py`). A saved `.iq` can be listened to (`iq_playback.py`: mix an
   offset within the band to baseband, resample to the demod rate, reuse
@@ -58,6 +66,7 @@ Content-Security-Policy, so the app shell works fully offline.
   worker lifecycle (`worker.py`: start/stop/is_running, terminate->wait->kill,
   and completed-vs-died outcome mapping behind one interface), per-mode subprocess wrappers
   (`sdr.py`, `radio.py`, `decoders.py`, `adsb.py`, `capture.py`, `scan.py`),
+  the capture catalogue (`catalogue.py`),
   offline `replay.py`, snap-to-peak `tuning.py`, SQLite `store.py`,
   optional gpsd geotagging `gps.py`, SigMF export `sigmf.py`,
   WAV audio recording `audio_record.py`, IQ-capture playback `iq_playback.py`

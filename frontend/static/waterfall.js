@@ -1307,7 +1307,7 @@ function renderCaptures() {
     const redactBtn = hasGeo ? html`<button data-redact="${c.name}">Remove location</button>` : "";
     const isAudio = c.kind === "audio";
     const kindBadge = isAudio ? html`<span class="cap-kind-badge">audio</span>` : "";
-    const sigmfName = (!isAudio && c.name.endsWith(".iq")) ? c.name.slice(0, -3) + ".sigmf-meta" : "";
+    const sigmfName = c.sigmf_name || "";  // server-derived in backend/catalogue.py; JS no longer re-derives it
     const sigmfLink = (c.sigmf && sigmfName)
       ? html`<a href="/captures/${encodeURIComponent(sigmfName)}" download title="SigMF metadata (portable to other SDR tools)">SigMF</a>`
       : "";
