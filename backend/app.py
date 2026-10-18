@@ -285,6 +285,40 @@ def _record_contact(sighting) -> None:
         _emit_contacts()
 
 
+def _record_scan_sighting(sighting) -> None:
+    """Promote one deduped Auto-Scan sighting into the inventory.
+
+    The one promotion point (INTENT #15): scan.py derives the sighting
+    through contacts.py and hands it here at phase end, and this routes
+    it through the same _record_contact -> store.record_contact write
+    path (and the same 2 s SightingThrottle) as a live/manual find --
+    no second writer, no scan_key ever persisted. ISM position is the
+    receiver's, attached exactly as _emit_event does: _receiver_geotag
+    already applies the stored precision (gps_precision, default full),
+    and _broadcast_contacts coarsens only the emitted copy (#16).
+    ADS-B position is the aircraft's and is not coarsened; enrichment
+    mirrors _emit_adsb (lookup by hex, readsb's own ``r`` already
+    carried in the sighting's info by contacts.adsb_sightings).
+    """
+    if sighting.kind == "ism":
+        geo = _receiver_geotag()
+        _record_contact(replace(sighting, lat=(geo or {}).get("lat"),
+                                lon=(geo or {}).get("lon")))
+        return
+    if sighting.kind == "adsb":
+        info = dict(sighting.info)
+        label = sighting.label
+        reg = info.get("registration") or icao_to_registration(sighting.ident)
+        if reg:
+            info.setdefault("registration", reg)
+            if label == sighting.ident.upper():
+                label = reg
+        country = info.get("country") or icao_country(sighting.ident)
+        if country:
+            info.setdefault("country", country)
+        _record_contact(replace(sighting, label=label, info=info))
+
+
 def _receiver_geotag():
     """Coarsened receiver geolocation if GPS is enabled and has a fix, else None."""
     geo = _gps.geolocation()
@@ -704,7 +738,7 @@ def _start_decode_file(name: str) -> bool:
 def _start_scan(cfg: ScanConfig) -> bool:
     def build(ctx):
         _state["scan_config"] = cfg
-        return AutoScanner(cfg, on_event=ctx.on_event)
+        return AutoScanner(cfg, on_event=ctx.on_event, on_sighting=_record_scan_sighting)
     return _launcher.launch(LaunchSpec("scan", build, scan_finish()))
 
 

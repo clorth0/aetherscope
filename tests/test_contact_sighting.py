@@ -9,8 +9,9 @@ Inventory pinned here (origin/main a673e07, pre-refactor):
                   dedup for the whole phase (no TTL), first wins, count++,
                   scan_decoded live-emitted for EVERY event. Never the store.
   scan.py:291-314 scan ADS-B hex alone -> phase findings only, latest wins.
-Destination is unchanged by the refactor: scan sightings stay scan-only
-(the parked sightings->inventory question is NOT answered here).
+Destination (Matt's decision on parked INTENT #15): Auto-Scan sightings
+are promoted to the persistent inventory at phase end, via the same
+app._record_contact -> store.record_contact write path as live finds.
 """
 import os, sys, traceback
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -130,12 +131,9 @@ def test_app_emit_adsb_records_through_module():
     key, kind, label, ident, info, lat, lon = recorded[0]
     assert (key, kind, label, ident, lat, lon) == ("adsb:abc123", "adsb", "UAL1", "abc123", 1.0, 2.0)
 
-def test_scan_phases_consume_module_and_stay_scan_only():
+def _fake_scan(evs, acs, on_sighting=None):
     import backend.scan as scanmod
     from backend.scan import AutoScanner, ScanConfig
-    evs = [{"model": "M", "id": 7, "time": "t1"}, {"model": "M", "id": 7, "time": "t2"},
-           {"model": "Other", "id": 7, "time": "t3"}]
-    acs = [{"hex": "abc", "flight": "A"}, {"hex": "abc", "flight": "B"}, {"flight": "nohex"}]
     class FakeDecoder:
         def __init__(self, cfg, on_event): self.on_event = on_event
         def start(self):
@@ -147,18 +145,125 @@ def test_scan_phases_consume_module_and_stay_scan_only():
         def stop(self): pass
     emitted = []
     sc = AutoScanner(ScanConfig(rtl433_seconds=0.01, adsb_seconds=0.01),
-                     on_event=lambda n, p: emitted.append((n, p)))
+                     on_event=lambda n, p: emitted.append((n, p)),
+                     on_sighting=on_sighting)
+    ctx = (scanmod, FakeDecoder, FakeRecv)
+    return sc, emitted, ctx
+
+def _run_fake_scan(sc, ctx):
+    scanmod, FakeDecoder, FakeRecv = ctx
     with mock.patch.object(scanmod, "Rtl433Decoder", FakeDecoder), \
          mock.patch.object(scanmod, "AdsbReceiver", FakeRecv):
         devices = sc._phase_rtl433(433_920_000, "ISM 433 MHz", "rtl433_433")
         aircraft = sc._phase_adsb()
+    return devices, aircraft
+
+def test_scan_phases_consume_module_and_stay_scan_only():
+    # Ephemeral scan view unchanged: findings + scan_key + live emit, no store in scan.py.
+    evs = [{"model": "M", "id": 7, "time": "t1"}, {"model": "M", "id": 7, "time": "t2"},
+           {"model": "Other", "id": 7, "time": "t3"}]
+    acs = [{"hex": "abc", "flight": "A"}, {"hex": "abc", "flight": "B"}, {"flight": "nohex"}]
+    sc, emitted, ctx = _fake_scan(evs, acs)
+    devices, aircraft = _run_fake_scan(sc, ctx)
+    import backend.scan as scanmod
     assert [d["_key"] for d in devices] == ["M/7", "Other/7"]
     assert devices[0]["_count"] == 2 and devices[0]["_last_time"] == "t2"
-    assert len([e for e in emitted if e[0] == "scan_decoded"]) == 3  # live emit not deduped
-    assert sc._phases[0].findings["devices"] is devices              # findings, not store
+    assert len([e for e in emitted if e[0] == "scan_decoded"]) == 3
+    assert sc._phases[0].findings["devices"] is devices
     assert len(aircraft) == 1 and aircraft[0]["flight"] == "B" and sc._phases[1].findings["aircraft"] is aircraft
-    # scan path has no store reference at all (destination unchanged)
     assert not hasattr(scanmod, "get_store") and not hasattr(scanmod, "record_contact")
+
+def _real_store():
+    import tempfile, os as _os
+    from backend.store import Store
+    return Store(_os.path.join(tempfile.mkdtemp(), "t.db"))
+
+def _promote_via_app(store, geo=None):
+    from backend import app as appmod
+    return appmod, mock.patch.object(appmod, "get_store", lambda: store), \
+        mock.patch.object(appmod.socketio, "emit", lambda n, p=None: None), \
+        mock.patch.object(appmod, "_contact_throttle", SightingThrottle(0.0)), \
+        mock.patch.object(appmod, "_receiver_geotag", lambda: geo)
+
+def test_scan_sighting_appears_in_persistent_inventory():
+    from backend import app as appmod
+    store = _real_store()
+    evs = [{"model": "M", "id": 7, "time": "t1", "temperature_C": 5}]
+    acs = [{"hex": "abc123", "flight": "UAL1", "lat": 1.0, "lon": 2.0}]
+    patches = _promote_via_app(store)
+    with patches[1], patches[2], patches[3], patches[4]:
+        sc, emitted, ctx = _fake_scan(evs, acs, on_sighting=appmod._record_scan_sighting)
+        _run_fake_scan(sc, ctx)
+    rows = {r["key"]: r for r in store.list_contacts()}
+    assert rows["ism:M:7"]["kind"] == "ism" and rows["ism:M:7"]["info"] == {"temperature_C": 5}
+    assert rows["adsb:abc123"]["kind"] == "adsb" and rows["adsb:abc123"]["label"] == "UAL1"
+    assert rows["adsb:abc123"]["lat"] == 1.0 and rows["adsb:abc123"]["lon"] == 2.0
+
+def test_scan_repeat_sighting_updates_not_duplicates():
+    # Dedup/update follows manual re-add (store.record_contact): same
+    # inventory_key updates last_seen/count, never a second row. Within
+    # one phase ScanSightings dedups raw repeats, so 3 raw events = 1
+    # promoted sighting; a second phase promotes again and count bumps.
+    from backend import app as appmod
+    store = _real_store()
+    evs = [{"model": "M", "id": 7, "time": "t1"}, {"model": "M", "id": 7, "time": "t2"},
+           {"model": "M", "id": 7, "time": "t3"}]
+    patches = _promote_via_app(store)
+    with patches[1], patches[2], patches[3], patches[4]:
+        for _ in range(2):
+            sc, emitted, ctx = _fake_scan(evs, [], on_sighting=appmod._record_scan_sighting)
+            with mock.patch.object(ctx[0], "Rtl433Decoder", ctx[1]):
+                sc._phase_rtl433(433_920_000, "ISM 433 MHz", "rtl433_433")
+    rows = store.list_contacts()
+    assert len(rows) == 1 and rows[0]["key"] == "ism:M:7" and rows[0]["count"] == 2
+
+def test_scan_promotion_matches_manual_add_record_shape():
+    from backend import app as appmod
+    ev = {"model": "M", "id": 7, "temperature_C": 5}
+    manual, scanned = _real_store(), _real_store()
+    patches = _promote_via_app(manual)
+    with patches[1], patches[2], patches[3], patches[4]:
+        appmod._emit_event(dict(ev))
+    patches = _promote_via_app(scanned)
+    with patches[1], patches[2], patches[3], patches[4]:
+        sc, emitted, ctx = _fake_scan([dict(ev)], [], on_sighting=appmod._record_scan_sighting)
+        with mock.patch.object(ctx[0], "Rtl433Decoder", ctx[1]):
+            sc._phase_rtl433(433_920_000, "ISM 433 MHz", "rtl433_433")
+    m, s = manual.list_contacts()[0], scanned.list_contacts()[0]
+    fields = ("key", "kind", "label", "ident", "info", "count", "lat", "lon")
+    assert {k: m[k] for k in fields} == {k: s[k] for k in fields}
+    assert set(m) == set(s)  # same record shape, no source/extra field invented
+
+def test_clear_inventory_covers_promoted_scan_records():
+    from backend import app as appmod
+    store = _real_store()
+    patches = _promote_via_app(store)
+    with patches[1], patches[2], patches[3], patches[4]:
+        sc, emitted, ctx = _fake_scan([{"model": "M", "id": 7}], [], on_sighting=appmod._record_scan_sighting)
+        with mock.patch.object(ctx[0], "Rtl433Decoder", ctx[1]):
+            sc._phase_rtl433(433_920_000, "ISM 433 MHz", "rtl433_433")
+        assert len(store.list_contacts()) == 1
+        appmod.on_clear_inventory()
+    assert store.list_contacts() == []
+
+def test_scan_promotion_stores_full_precision_broadcast_stays_coarse():
+    # #16 split: stored ISM location keeps stored (gps_precision=full)
+    # precision via _receiver_geotag; only the broadcast copy coarsens.
+    from backend import app as appmod
+    store = _real_store()
+    geo = {"lat": 40.123456, "lon": -105.654321}
+    patches = _promote_via_app(store, geo=geo)
+    with patches[1], patches[2], patches[3]:
+        # use the real _receiver_geotag seam against a fake GPS fix
+        with mock.patch.object(appmod._gps, "geolocation", lambda: dict(geo)):
+            sc, emitted, ctx = _fake_scan([{"model": "M", "id": 7}], [], on_sighting=appmod._record_scan_sighting)
+            with mock.patch.object(ctx[0], "Rtl433Decoder", ctx[1]):
+                sc._phase_rtl433(433_920_000, "ISM 433 MHz", "rtl433_433")
+    row = store.list_contacts()[0]
+    assert (row["lat"], row["lon"]) == (40.123456, -105.654321)  # stored full
+    b = appmod._broadcast_contacts([row])[0]
+    assert (b["lat"], b["lon"]) == (40.12, -105.65)              # broadcast ~1km
+    assert (row["lat"], row["lon"]) == (40.123456, -105.654321)  # stored untouched
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

@@ -68,10 +68,17 @@
   sighting) gates live inventory writes, while `ScanSightings` dedupes
   for a whole scan phase with no TTL (first rtl_433 event wins and
   counts repeats; latest ADS-B aircraft per hex wins). Destination is
-  not this module's decision: live sightings still go to the persistent
-  inventory and Auto-Scan sightings still stay scan-only -- whether
-  scan sightings should enter the inventory remains a parked question
-  this module does not answer. `store.py` keeps only persistence.
+  not this module's decision, but it is now decided (INTENT #15): live
+  sightings go to the persistent inventory, and Auto-Scan sightings are
+  promoted there too. Promotion is at phase end -- one upsert per
+  deduped sighting, not per raw event and not a full-inventory rewrite
+  (each `record_contact` is a primary-key upsert) -- through the same
+  app `_record_contact` -> `store.record_contact` write path as a live
+  find, wired as scan.py's `on_sighting` so scan.py stays store-free
+  and no `scan_key` is ever persisted. The ephemeral scan findings and
+  their live display are unchanged. A promoted record carries no source
+  field, so the inventory cannot tell a scan find from a live one.
+  `store.py` keeps only persistence.
 - **Capture catalogue.** `catalogue.py` is the deep module behind the capture
   list: typed `IqCaptureEntry` / `AudioCaptureEntry` records (two shapes —
   IQ has sample rate/format and a SigMF companion, audio has demod/audio
