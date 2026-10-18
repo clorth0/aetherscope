@@ -42,6 +42,7 @@ from .decode_file import IqFileDecoder
 from .scan import AutoScanner, ScanConfig
 from .sdr import SweepConfig, SweepStreamer
 from .jobs import JobBoard, mode_spec
+from .launch import Launcher, LaunchSpec, done_finish, exit_finish, scan_finish, toast_on_completed
 from .store import get_store
 from . import telemetry
 
@@ -386,10 +387,6 @@ def _emit_adsb(aircraft: list[dict], meta: dict) -> None:
     socketio.emit("adsb", {"aircraft": aircraft, "meta": meta})
 
 
-def _emit_scan(name: str, payload: dict) -> None:
-    socketio.emit(name, payload)
-
-
 # ------------------------------------------------------------------
 # Job lifecycle. One board, one publish path.
 # ------------------------------------------------------------------
@@ -422,19 +419,38 @@ def _finish_job(identity: int) -> bool:
     return job is not None
 
 
-def _exit_handler(identity: int, kind: str):
-    death_label = mode_spec(kind).death_label
+class _AppLaunchHost:
+    """LaunchHost adapter: app globals behind the launch module's seam."""
 
-    def on_exit(reason: str) -> None:
-        if reason == "stopped":
-            return
-        if not _finish_job(identity):
-            return
-        telemetry.bump("subprocess_deaths")
-        if _device["info"] is not None:
-            _emit_toast("error", f"{death_label} stopped unexpectedly.")
+    def begin_job(self, kind, make):
+        return _begin_job(kind, make)
+
+    def finish_job(self, identity):
+        return _finish_job(identity)
+
+    def emit(self, name, payload):
+        socketio.emit(name, payload)
+
+    def toast(self, level, message):
+        _emit_toast(level, message)
+
+    def status(self):
         _emit_status()
-    return on_exit
+
+    def captures_list(self):
+        _emit_captures_list()
+
+    def device_present(self):
+        return _device["info"] is not None
+
+    def bump_deaths(self):
+        telemetry.bump("subprocess_deaths")
+
+    def death_label(self, kind):
+        return mode_spec(kind).death_label
+
+
+_launcher = Launcher(_AppLaunchHost())
 
 
 def _begin_job(kind: str, make):
@@ -477,93 +493,65 @@ def _begin_job(kind: str, make):
 
 
 def _start_sweep(cfg: SweepConfig) -> bool:
-    def make(identity: int):
+    def build(ctx):
         _state["sweep_config"] = cfg
-        return SweepStreamer(
-            cfg,
-            on_sweep=_emit_sweep,
-            on_exit=_exit_handler(identity, "sweep"),
-        )
-    ok, _value = _begin_job("sweep", make)
-    return ok
+        return SweepStreamer(cfg, on_sweep=_emit_sweep, on_exit=ctx.on_exit)
+    return _launcher.launch(LaunchSpec("sweep", build, exit_finish()))
 
 
 def _start_decode(cfg: DecodeConfig) -> bool:
-    def make(identity: int):
+    def build(ctx):
         _state["decode_config"] = cfg
-        return Rtl433Decoder(
-            cfg,
-            on_event=_emit_event,
-            on_exit=_exit_handler(identity, "decode"),
-        )
-    ok, _value = _begin_job("decode", make)
-    return ok
+        return Rtl433Decoder(cfg, on_event=_emit_event, on_exit=ctx.on_exit)
+    return _launcher.launch(LaunchSpec("decode", build, exit_finish()))
+
+
+def _capture_toast(reason, extra, device_present):
+    record = extra[0]
+    if reason == "completed":
+        return ("info", f"Capture done: {record.name} ({record.file_size / (1024 * 1024):.1f} MB)")
+    if reason == "cancelled":
+        return ("warn", f"Capture cancelled: {record.name}")
+    if device_present:
+        return ("error", f"Capture failed: {record.name}")
+    return None
 
 
 def _start_capture(cfg: CaptureConfig) -> bool:
     geo = _receiver_geotag()
 
-    def on_done(identity: int):
-        def _on_done(record, reason: str) -> None:
-            cleared = _finish_job(identity)
-            if reason == "completed":
-                size_mb = record.file_size / (1024 * 1024)
-                _emit_toast("info", f"Capture done: {record.name} ({size_mb:.1f} MB)")
-            elif reason == "cancelled":
-                _emit_toast("warn", f"Capture cancelled: {record.name}")
-            elif _device["info"] is not None:
-                _emit_toast("error", f"Capture failed: {record.name}")
-            socketio.emit("capture_done", {"record": asdict(record), "reason": reason})
-            _emit_captures_list()
-            if cleared:
-                _emit_status()
-        return _on_done
-
-    def make(identity: int):
+    def build(ctx):
         _state["capture_config"] = cfg
-        return IqCapture(
-            cfg,
-            on_progress=_emit_capture_progress,
-            on_done=on_done(identity),
-            geolocation=geo,
-        )
-
-    ok, worker = _begin_job("capture", make)
-    if not ok:
-        return False
-    socketio.emit("capture_started", {"record": asdict(worker.record)})
-    return True
+        return IqCapture(cfg, on_progress=_emit_capture_progress,
+                         on_done=ctx.on_done, geolocation=geo)
+    return _launcher.launch(LaunchSpec(
+        "capture", build,
+        done_finish("capture_done",
+                    lambda extra, reason: {"record": asdict(extra[0]), "reason": reason},
+                    toast_for=_capture_toast, toast_before_event=True,
+                    refresh_captures=True),
+        started=lambda worker: [("emit", "capture_started", {"record": asdict(worker.record)})],
+    ))
 
 
 def _start_adsb(cfg: AdsbConfig) -> bool:
-    def make(identity: int):
+    def build(ctx):
         _state["adsb_config"] = cfg
-        return AdsbReceiver(
-            cfg,
-            on_update=_emit_adsb,
-            on_exit=_exit_handler(identity, "adsb"),
-        )
-    ok, _value = _begin_job("adsb", make)
-    return ok
+        return AdsbReceiver(cfg, on_update=_emit_adsb, on_exit=ctx.on_exit)
+    return _launcher.launch(LaunchSpec("adsb", build, exit_finish()))
 
 
 def _start_radio(cfg: RadioConfig) -> bool:
-    def make(identity: int):
+    def build(ctx):
         _state["radio_config"] = cfg
         return RadioReceiver(
-            cfg,
-            on_audio=_on_radio_audio,
-            on_exit=_exit_handler(identity, "radio"),
-            on_signal=lambda db: socketio.emit("radio_signal", {"dbfs": db}),
-        )
-    ok, _value = _begin_job("radio", make)
-    if not ok:
-        return False
-    socketio.emit(
-        "radio_started",
-        {"sample_rate": AUDIO_RATE, "freq_mhz": cfg.freq_mhz, "demod": cfg.demod},
-    )
-    return True
+            cfg, on_audio=_on_radio_audio, on_exit=ctx.on_exit,
+            on_signal=lambda db: socketio.emit("radio_signal", {"dbfs": db}))
+    return _launcher.launch(LaunchSpec(
+        "radio", build, exit_finish(),
+        started=lambda worker: [("emit", "radio_started",
+                                 {"sample_rate": AUDIO_RATE, "freq_mhz": cfg.freq_mhz, "demod": cfg.demod})],
+    ))
 
 
 def _start_scan_radio(cfg: ScanRadioConfig) -> bool:
@@ -571,21 +559,17 @@ def _start_scan_radio(cfg: ScanRadioConfig) -> bool:
         _emit_toast("error", "No marked frequencies to scan.")
         return False
 
-    def make(identity: int):
+    def build(ctx):
         return RadioScanner(
             cfg,
             on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
             on_event=lambda name, payload: socketio.emit(name, payload),
-            on_exit=_exit_handler(identity, "scan_radio"),
-        )
-    ok, _value = _begin_job("scan_radio", make)
-    if not ok:
-        return False
-    socketio.emit(
-        "scan_radio_started",
-        {"count": len(cfg.freqs_mhz), "sample_rate": AUDIO_RATE, "demod": cfg.demod},
-    )
-    return True
+            on_exit=ctx.on_exit)
+    return _launcher.launch(LaunchSpec(
+        "scan_radio", build, exit_finish(),
+        started=lambda worker: [("emit", "scan_radio_started",
+                                 {"count": len(cfg.freqs_mhz), "sample_rate": AUDIO_RATE, "demod": cfg.demod})],
+    ))
 
 
 def _start_replay(name: str) -> bool:
@@ -599,26 +583,17 @@ def _start_replay(name: str) -> bool:
     center = entry.freq_hz
     sr = getattr(entry, "sample_rate", 2_000_000)  # audio shape has no rate
 
-    def on_done(identity: int):
-        def _on_done(reason: str) -> None:
-            cleared = _finish_job(identity)
-            socketio.emit("replay_done", {"reason": reason, "name": name})
-            if cleared:
-                _emit_status()
-        return _on_done
-
-    def make(identity: int):
+    def build(ctx):
         return IqReplay(
             entry.path, center, sr,
             on_frame=lambda f0, f1, powers: socketio.emit(
                 "sweep", {"f0": f0, "f1": f1, "powers": powers, "rate_hz": 20.0}),
-            on_done=on_done(identity),
-        )
-    ok, _value = _begin_job("replay", make)
-    if not ok:
-        return False
-    socketio.emit("replay_started", {"name": name, "freq_hz": center, "sample_rate": sr})
-    return True
+            on_done=ctx.on_done)
+    return _launcher.launch(LaunchSpec(
+        "replay", build,
+        done_finish("replay_done", lambda extra, reason: {"reason": reason, "name": name}),
+        started=lambda worker: [("emit", "replay_started", {"name": name, "freq_hz": center, "sample_rate": sr})],
+    ))
 
 
 def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
@@ -634,27 +609,19 @@ def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
     sr = getattr(entry, "sample_rate", 2_000_000)
     center = entry.freq_hz
 
-    def on_done(identity: int):
-        def _on_done(reason: str) -> None:
-            cleared = _finish_job(identity)
-            socketio.emit("iq_play_done", {"reason": reason, "name": name})
-            if cleared:
-                _emit_status()
-        return _on_done
-
-    def make(identity: int):
+    def build(ctx):
         return IqAudioPlayer(
             entry.path, sr, demod, offset_hz,
             on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
-            on_done=on_done(identity),
-        )
-    ok, _value = _begin_job("iq_play", make)
-    if not ok:
-        return False
-    socketio.emit("radio_started", {"sample_rate": AUDIO_RATE, "freq_mhz": center / 1e6, "demod": demod})
-    socketio.emit("iq_play_started", {"name": name, "demod": demod, "offset_hz": offset_hz,
-                                      "center_hz": center, "sample_rate": sr})
-    return True
+            on_done=ctx.on_done)
+    return _launcher.launch(LaunchSpec(
+        "iq_play", build,
+        done_finish("iq_play_done", lambda extra, reason: {"reason": reason, "name": name}),
+        started=lambda worker: [
+            ("emit", "radio_started", {"sample_rate": AUDIO_RATE, "freq_mhz": center / 1e6, "demod": demod}),
+            ("emit", "iq_play_started", {"name": name, "demod": demod, "offset_hz": offset_hz,
+                                         "center_hz": center, "sample_rate": sr})],
+    ))
 
 
 def _start_decode_file(name: str) -> bool:
@@ -668,47 +635,23 @@ def _start_decode_file(name: str) -> bool:
     sr = getattr(entry, "sample_rate", 2_000_000)
     center = entry.freq_hz
 
-    def on_done(identity: int):
-        def _on_done(reason: str) -> None:
-            cleared = _finish_job(identity)
-            socketio.emit("decode_file_done", {"reason": reason, "name": name})
-            if reason == "completed":
-                _emit_toast("info", f"Decode finished: {name}")
-            if cleared:
-                _emit_status()
-        return _on_done
-
-    def make(identity: int):
-        return IqFileDecoder(
-            entry.path, sr, center,
-            on_event=_emit_event,
-            on_done=on_done(identity),
-        )
-    ok, _value = _begin_job("decode_file", make)
-    if not ok:
-        return False
-    socketio.emit("decode_file_started", {"name": name, "freq_hz": center, "sample_rate": sr})
-    _emit_toast("info", f"Decoding {name} (this can take a moment)")
-    return True
+    def build(ctx):
+        return IqFileDecoder(entry.path, sr, center, on_event=_emit_event, on_done=ctx.on_done)
+    return _launcher.launch(LaunchSpec(
+        "decode_file", build,
+        done_finish("decode_file_done", lambda extra, reason: {"reason": reason, "name": name},
+                    toast_for=toast_on_completed(f"Decode finished: {name}")),
+        started=lambda worker: [
+            ("emit", "decode_file_started", {"name": name, "freq_hz": center, "sample_rate": sr}),
+            ("toast", "info", f"Decoding {name} (this can take a moment)")],
+    ))
 
 
 def _start_scan(cfg: ScanConfig) -> bool:
-    def on_scan_event(identity: int):
-        def _on_scan_event(name: str, payload: dict) -> None:
-            if name in ("scan_completed", "scan_failed"):
-                cleared = _finish_job(identity)
-                _emit_scan(name, payload)
-                if cleared:
-                    _emit_status()
-            else:
-                _emit_scan(name, payload)
-        return _on_scan_event
-
-    def make(identity: int):
+    def build(ctx):
         _state["scan_config"] = cfg
-        return AutoScanner(cfg, on_event=on_scan_event(identity))
-    ok, _value = _begin_job("scan", make)
-    return ok
+        return AutoScanner(cfg, on_event=ctx.on_event)
+    return _launcher.launch(LaunchSpec("scan", build, scan_finish()))
 
 
 def _stop_all_external() -> None:

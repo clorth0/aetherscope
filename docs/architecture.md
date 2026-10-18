@@ -64,7 +64,11 @@ Content-Security-Policy, so the app shell works fully offline.
 
 - `backend/`: Flask app (`app.py`), the single job board (`jobs.py`), the one
   worker lifecycle (`worker.py`: start/stop/is_running, terminate->wait->kill,
-  and completed-vs-died outcome mapping behind one interface), per-mode subprocess wrappers
+  and completed-vs-died outcome mapping behind one interface), the mode-launch
+  module (`launch.py`: one declarative `LaunchSpec` per mode consumed by a
+  single `Launcher`, owning the started/finish toast/status derivation in one
+  place — JobBoard still owns job state and WorkerLifecycle still owns each
+  worker's lifecycle), per-mode subprocess wrappers
   (`sdr.py`, `radio.py`, `decoders.py`, `adsb.py`, `capture.py`, `scan.py`),
   the capture catalogue (`catalogue.py`),
   offline `replay.py`, snap-to-peak `tuning.py`, SQLite `store.py`,
