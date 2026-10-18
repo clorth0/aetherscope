@@ -15,11 +15,14 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from .config import BOOKMARK_DEMODS
+
 # ---------------------------------------------------------------------------
 # Module-level validation / normalisation helpers
 # ---------------------------------------------------------------------------
 
-_ALLOWED_DEMODS = {"fm", "nfm", "am", None}
+# Bookmark demod allowance (DEMODS plus None) has one home in config.py.
+_ALLOWED_DEMODS = BOOKMARK_DEMODS
 
 
 def normalize_tags(tags) -> str:

@@ -25,6 +25,7 @@ import numpy as np
 from scipy.signal import firwin, lfilter
 
 from . import telemetry
+from .config import DEMOD_ERROR, DEMODS
 from .worker import WorkerLifecycle
 
 log = logging.getLogger(__name__)
@@ -163,8 +164,8 @@ class RadioConfig:
     sample_rate_hz: int = FS_IN
 
     def __post_init__(self) -> None:
-        if self.demod not in ("fm", "nfm", "am"):
-            raise ValueError("Invalid demod (use fm, nfm, or am)")
+        if self.demod not in DEMODS:
+            raise ValueError(DEMOD_ERROR)
         if not (1.0 <= self.freq_mhz <= 6000.0):
             raise ValueError("Frequency out of range (1-6000 MHz)")
 
@@ -263,6 +264,10 @@ class ScanRadioConfig:
     vga_gain: int = 20
     amp_enable: bool = False
     sample_rate_hz: int = FS_IN
+
+    def __post_init__(self) -> None:
+        if self.demod not in DEMODS:
+            raise ValueError(DEMOD_ERROR)
 
 
 ScanEventCallback = Callable[[str, dict], None]

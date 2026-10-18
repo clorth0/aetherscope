@@ -63,6 +63,24 @@
   play, or decode; the raw sidecar dict crosses no seam. Its `to_dict()`
   reproduces the sidecar exactly; the only server-added field in the
   enriched list is the derived `sigmf_name`.
+- **Mode-config knowledge.** Field lists have exactly one authoritative
+  home per side and no code generation joins them: Python dataclasses
+  (`SweepConfig`, `DecodeConfig`, `CaptureConfig`, `AdsbConfig`,
+  `RadioConfig`, `ScanRadioConfig`, `ScanConfig`, bounds in their
+  constructors) define the server fields, and the hand-written
+  `read*`/`apply*ConfigToInputs` mirrors in the per-mode `aether-*.js`
+  modules define the browser fields — deliberately no build step, no
+  deriving JS from Python, in keeping with the vendored/offline design.
+  The one home for the *correspondence* between them is the static
+  guard `tests/test_mode_config_guard.py`: it parses both sides and
+  fails on drift, with intentional exceptions named there (decode
+  `label` and radio gains/sample-rate are Python-only with no UI
+  inputs; scan-radio's wire `{freqs, demod, squelch_dbfs}` is a named
+  rename to `freqs_mhz`, not a dataclass mirror). The demod vocabulary
+  itself has one Python home, `config.py` (`DEMODS`, plus the
+  bookmark-only subset `BOOKMARK_DEMODS` that also allows `None`),
+  consumed by `radio.py`, `app.py`, and `store.py`; the same guard
+  checks the HTML demod controls against it.
 - **Closing the loop.** Live radio audio can be recorded to WAV
   (`audio_record.py`). A saved `.iq` can be listened to (`iq_playback.py`: mix an
   offset within the band to baseband, resample to the demod rate, reuse
@@ -79,7 +97,9 @@ Content-Security-Policy, so the app shell works fully offline.
 
 ## Layout
 
-- `backend/`: Flask app (`app.py`), the single job board (`jobs.py`), the one
+- `backend/`: Flask app (`app.py`), the mode-config vocabulary
+  (`config.py`: the demod set and its bookmark subset — field lists
+  themselves stay with the per-mode dataclasses), the single job board (`jobs.py`), the one
   worker lifecycle (`worker.py`: start/stop/is_running, terminate->wait->kill,
   and completed-vs-died outcome mapping behind one interface), the mode-launch
   module (`launch.py`: one declarative `LaunchSpec` per mode consumed by a

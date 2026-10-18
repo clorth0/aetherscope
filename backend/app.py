@@ -30,6 +30,7 @@ from .adsb import AdsbConfig, AdsbReceiver
 from .adsb_enrich import icao_to_registration, icao_country
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_basename, delete_capture, list_captures, redact_location
 from .catalogue import find_capture, list_catalogue
+from .config import DEMOD_ERROR, DEMODS
 from .contacts import SightingThrottle, adsb_sighting, ism_sighting
 from .gps import GpsClient, coarsen_geolocation
 from .audio_record import start_recording, finalize_recording
@@ -259,7 +260,7 @@ def _status_fields_locked() -> dict:
         "capture_config": asdict(_state["capture_config"]),
         "adsb_config": asdict(_state["adsb_config"]),
         "radio_config": asdict(_state["radio_config"]),
-        "scan_config": _state["scan_config"].__dict__,
+        "scan_config": asdict(_state["scan_config"]),
     }
 
 
@@ -599,7 +600,7 @@ def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
     if entry is None or not entry.exists:
         _emit_toast("error", "Capture not found")
         return False
-    if demod not in ("fm", "nfm", "am"):
+    if demod not in DEMODS:
         demod = "fm"
     sr = getattr(entry, "sample_rate", 2_000_000)
     center = entry.freq_hz
@@ -809,9 +810,13 @@ def on_start_radio(data):
 @socketio.on("start_scan_radio")
 def on_start_scan_radio(data):
     data = data or {}
-    demod = data.get("demod", "nfm")
-    if demod not in ("fm", "nfm", "am"):
-        _emit_toast("error", "Invalid demod (use fm, nfm, or am)")
+    # The constructor is the demod check (config.DEMODS); building the
+    # config first preserves the original toast precedence over the
+    # no-frequencies error below.
+    try:
+        cfg = ScanRadioConfig(demod=data.get("demod", "nfm"))
+    except (TypeError, ValueError):
+        _emit_toast("error", DEMOD_ERROR)
         return
     freqs = []
     for f in (data.get("freqs") or []):
@@ -828,7 +833,7 @@ def on_start_scan_radio(data):
         squelch = float(data.get("squelch_dbfs", -45.0))
     except (TypeError, ValueError):
         squelch = -45.0
-    _start_scan_radio(ScanRadioConfig(freqs_mhz=freqs, demod=demod, squelch_dbfs=squelch))
+    _start_scan_radio(replace(cfg, freqs_mhz=freqs, squelch_dbfs=squelch))
 
 
 @socketio.on("start_replay")
