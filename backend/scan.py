@@ -23,7 +23,7 @@ import numpy as np
 
 from .adsb import AdsbConfig, AdsbReceiver
 from .decoders import DecodeConfig, Rtl433Decoder
-from .contacts import ScanSightings
+from .contacts import ContactSighting, ScanSightings
 from .sdr import SweepConfig, SweepStreamer
 from .worker import WorkerLifecycle
 
@@ -125,9 +125,14 @@ class PhaseSummary:
 # Auto-scanner
 # ------------------------------------------------------------------
 class AutoScanner(WorkerLifecycle):
-    def __init__(self, config: ScanConfig, on_event: EventCallback):
+    def __init__(self, config: ScanConfig, on_event: EventCallback,
+                 on_sighting: Callable[[ContactSighting], None] | None = None):
         self.config = config
         self.on_event = on_event
+        # Promotion seam (INTENT #15): the app wires this to its one
+        # inventory write path; scan.py stays store-free. Called once
+        # per deduped sighting at phase end, never per raw event.
+        self.on_sighting = on_sighting
         super().__init__()
         self._current_job: Any = None
         self._phases: list[PhaseSummary] = []
@@ -145,6 +150,15 @@ class AutoScanner(WorkerLifecycle):
             self.on_event(name, payload)
         except Exception:
             log.exception("on_event failed")
+
+    def _promote(self, sightings: list[ContactSighting]) -> None:
+        if self.on_sighting is None:
+            return
+        for sighting in sightings:
+            try:
+                self.on_sighting(sighting)
+            except Exception:
+                log.exception("on_sighting failed")
 
     def _run(self) -> None:
         scan_started_at = time.time()
@@ -267,6 +281,7 @@ class AutoScanner(WorkerLifecycle):
 
         devices = sightings.ism_devices()
         phase.findings["devices"] = devices
+        self._promote(sightings.ism_sightings())
         phase.finished_at = time.time()
         self._emit("phase_completed", {"phase": name, "findings": phase.findings})
         return devices
@@ -296,6 +311,7 @@ class AutoScanner(WorkerLifecycle):
 
         aircraft_list = sightings.adsb_aircraft()
         phase.findings["aircraft"] = aircraft_list
+        self._promote(sightings.adsb_sightings())
         phase.finished_at = time.time()
         self._emit("phase_completed", {"phase": phase.name, "findings": phase.findings})
         return aircraft_list

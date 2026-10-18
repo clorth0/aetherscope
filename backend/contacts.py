@@ -32,11 +32,14 @@ Dedup likewise has two real semantics, both owned here:
                     repeats; ADS-B keeps the latest aircraft per hex.
 
 Destination is NOT decided here. This module says what a sighting *is*
-and whether it is a repeat; callers keep deciding where it goes. Today
-live sightings go to the store (via app.py) and scan sightings go to
-scan findings only -- whether scan sightings should also enter the
-persistent inventory is a parked product question this module
-deliberately does not answer.
+and whether it is a repeat; callers keep deciding where it goes. Live
+sightings go to the store (via app.py), and -- per Matt's decision on
+the parked INTENT #15 question -- Auto-Scan sightings are promoted
+there too: at phase end the caller (app.py, wired through scan.py's
+``on_sighting``) upserts each deduped ``ScanSightings`` sighting
+through the same ``_record_contact`` -> ``store.record_contact`` write
+path as a live find. scan.py itself stays store-free; the ephemeral
+scan findings and their ``scan_key`` display are unchanged.
 """
 
 from __future__ import annotations
@@ -189,3 +192,27 @@ class ScanSightings:
 
     def adsb_aircraft(self) -> list[dict]:
         return list(self._adsb.values())
+
+    def ism_sightings(self) -> list[ContactSighting]:
+        """Deduped ISM devices as inventory sightings (inventory_key).
+
+        One sighting per scan_key, from the first event that won the
+        phase dedup -- so promotion never re-derives identity and a
+        phase's raw repeats become one durable sighting.
+        """
+        out = []
+        for device in self.ism_devices():
+            sighting = ism_sighting(device)
+            if sighting is not None:
+                out.append(sighting)
+        return out
+
+    def adsb_sightings(self) -> list[ContactSighting]:
+        """Latest aircraft per hex as inventory sightings (inventory_key)."""
+        out = []
+        for aircraft in self.adsb_aircraft():
+            sighting = adsb_sighting(aircraft,
+                                     registration=aircraft.get("r") or None)
+            if sighting is not None:
+                out.append(sighting)
+        return out
