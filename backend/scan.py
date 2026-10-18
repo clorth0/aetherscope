@@ -23,6 +23,7 @@ import numpy as np
 
 from .adsb import AdsbConfig, AdsbReceiver
 from .decoders import DecodeConfig, Rtl433Decoder
+from .contacts import ScanSightings
 from .sdr import SweepConfig, SweepStreamer
 from .worker import WorkerLifecycle
 
@@ -246,15 +247,11 @@ class AutoScanner(WorkerLifecycle):
         self._emit("phase_started", {"phase": name, "label": phase.label,
                                      "duration_s": self.config.rtl433_seconds})
 
-        seen: dict[str, dict] = {}
+        sightings = ScanSightings()
 
         def on_event(ev: dict):
-            key = f"{ev.get('model', '?')}/{ev.get('id', ev.get('hex', ev.get('channel', '?')))}"
-            if key not in seen:
-                seen[key] = {"first": ev, "count": 0, "last_time": ev.get("time")}
-            seen[key]["count"] += 1
-            seen[key]["last_time"] = ev.get("time")
-            # also live-emit the raw event
+            sightings.add_ism(ev)
+            # also live-emit the raw event (every event; dedup is findings-only)
             self._emit("scan_decoded", {"phase": name, "event": ev})
 
         decoder = Rtl433Decoder(
@@ -268,14 +265,7 @@ class AutoScanner(WorkerLifecycle):
         decoder.stop()
         self._current_job = None
 
-        # Build deduped device list
-        devices: list[dict] = []
-        for key, info in seen.items():
-            d = dict(info["first"])
-            d["_count"] = info["count"]
-            d["_last_time"] = info["last_time"]
-            d["_key"] = key
-            devices.append(d)
+        devices = sightings.ism_devices()
         phase.findings["devices"] = devices
         phase.finished_at = time.time()
         self._emit("phase_completed", {"phase": name, "findings": phase.findings})
@@ -288,14 +278,11 @@ class AutoScanner(WorkerLifecycle):
         self._emit("phase_started", {"phase": phase.name, "label": phase.label,
                                      "duration_s": self.config.adsb_seconds})
 
-        seen: dict[str, dict] = {}
+        sightings = ScanSightings()
 
         def on_update(aircraft: list[dict], meta: dict):
             for a in aircraft:
-                hex_id = a.get("hex")
-                if not hex_id:
-                    continue
-                seen[hex_id] = a
+                sightings.add_adsb(a)
 
         recv = AdsbReceiver(
             AdsbConfig(gain_db=32, rx_lat=self.config.rx_lat, rx_lon=self.config.rx_lon),
@@ -307,7 +294,7 @@ class AutoScanner(WorkerLifecycle):
         recv.stop()
         self._current_job = None
 
-        aircraft_list = list(seen.values())
+        aircraft_list = sightings.adsb_aircraft()
         phase.findings["aircraft"] = aircraft_list
         phase.finished_at = time.time()
         self._emit("phase_completed", {"phase": phase.name, "findings": phase.findings})
