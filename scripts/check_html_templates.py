@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT = ROOT / "frontend" / "static" / "waterfall.js"
+DEFAULTS = sorted((ROOT / "frontend" / "static").glob("aether-*.js"))
 
 
 def load(spec: str) -> str:
@@ -82,13 +82,17 @@ def hits(src: str) -> list[int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("spec", nargs="?", default=str(DEFAULT))
+    parser.add_argument("spec", nargs="*", default=None)
     args = parser.parse_args()
-    found = hits(load(args.spec))
-    print(f"{args.spec}: {len(found)} HTML templates are not html`` tagged")
-    for line in found:
-        print(f"  L{line}")
-    return 1 if found else 0
+    specs = args.spec or [str(p) for p in DEFAULTS]
+    bad = 0
+    for spec in specs:
+        found = hits(load(spec))
+        bad += len(found)
+        print(f"{spec}: {len(found)} HTML templates are not html`` tagged")
+        for line in found:
+            print(f"  L{line}")
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

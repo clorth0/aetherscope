@@ -12,13 +12,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKER = ROOT / "scripts" / "check_html_templates.py"
-WATERFALL = ROOT / "frontend" / "static" / "waterfall.js"
+STATIC = ROOT / "frontend" / "static"
+CORE = STATIC / "aether-core.js"
+FRONTEND_JS = sorted(STATIC.glob("aether-*.js"))
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
-def _run_checker(spec: str) -> subprocess.CompletedProcess[str]:
+def _run_checker(*specs: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(CHECKER), spec],
+        [sys.executable, str(CHECKER), *specs],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -26,7 +28,7 @@ def _run_checker(spec: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_current_waterfall_is_tagged():
-    result = _run_checker(str(WATERFALL))
+    result = _run_checker(*[str(p) for p in FRONTEND_JS])
     assert result.returncode == 0, result.stdout
 
 
@@ -53,9 +55,9 @@ def test_checker_ignores_a_comparison_and_requires_the_tag():
 
 
 def test_tag_escapes_text_and_keeps_raw_markup():
-    src = WATERFALL.read_text()
+    src = CORE.read_text()
     start = src.index("function escapeHtml")
-    end = src.index("function summarizeFields")
+    end = src.index("function fmtAgo")
     script = src[start:end] + textwrap.dedent("""
         const payload = '<img src=x onerror=alert(1)>';
         const safe = html`<span class="event-model">${payload}</span>`;
@@ -76,7 +78,7 @@ def test_tag_escapes_text_and_keeps_raw_markup():
 
 
 def test_call_sites_do_not_escape_before_the_tag():
-    text = WATERFALL.read_text()
+    text = "\n".join(p.read_text() for p in FRONTEND_JS)
     assert text.count("escapeHtml(") == 2
     workflow = WORKFLOW.read_text()
     assert "scripts/check_html_templates.py" in workflow

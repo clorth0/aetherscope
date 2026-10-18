@@ -95,6 +95,11 @@ Content-Security-Policy, so the app shell works fully offline.
   and file decode `decode_file.py`, ADS-B enrichment `adsb_enrich.py`,
   `telemetry.py`, `device.py`.
 - `frontend/`: `templates/index.html`, `static/` (canvas/UI JS, AudioWorklet,
-  CSS, vendored deps).
+  CSS, vendored deps). The browser JS is plain classic scripts with no
+  build step: `aether-core.js` (socket, shared state, status/toast
+  plumbing behind the `window.Aether` seam) loads first, one
+  `aether-<mode>.js` module per mode (sweep, decode, capture, adsb,
+  scan, radio, inventory) registers its socket handlers and config
+  hooks with the core, and `aether-boot.js` loads last.
 - `deploy/`: installers, launchd template, `restart.sh`, `Caddyfile.example`.
 - `tests/`: synthetic, hardware-free unit tests (run with `uv run python tests/test_*.py`).

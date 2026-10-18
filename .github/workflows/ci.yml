@@ -29,7 +29,7 @@ jobs:
           exit "$fail"
 
       - name: Check HTML templates
-        run: python3 scripts/check_html_templates.py frontend/static/waterfall.js
+        run: python3 scripts/check_html_templates.py frontend/static/aether-*.js
 
       - name: Check architecture names
         run: python3 scripts/check_architecture_names.py
