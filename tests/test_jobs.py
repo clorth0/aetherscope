@@ -144,10 +144,10 @@ def test_audio_snapshot_reads_both_fields_together():
 
 
 def test_status_pill_prints_the_server_label():
-    js = (ROOT / "frontend" / "static" / "waterfall.js").read_text()
+    js = (ROOT / "frontend" / "static" / "aether-core.js").read_text()
     body = re.search(r"function refreshStatusUI\(\) \{([\s\S]*?)\n\}", js).group(1)
-    assert "statusText.textContent = serverStatusLabel" in body
-    assert 'serverMode === "sweep"' not in body
+    assert "statusText.textContent = state.serverStatusLabel" in body
+    assert 'state.serverMode === "sweep"' not in body
     assert "s.status_label" in js
     app_source = (ROOT / "backend" / "app.py").read_text()
     assert '_state["mode"]' not in app_source

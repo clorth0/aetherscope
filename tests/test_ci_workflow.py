@@ -32,7 +32,9 @@ def test_workflow_checks_frontend_scripts_by_glob():
     named = re.findall(r"node --check (frontend/static/[A-Za-z0-9_-]+\.js)", text)
     assert named == []
     scripts = sorted(p.name for p in (ROOT / "frontend" / "static").glob("*.js"))
-    assert "waterfall.js" in scripts
+    assert "aether-core.js" in scripts
+    assert "aether-boot.js" in scripts
+    assert "waterfall.js" not in scripts
     assert "radio-audio-worklet.js" in scripts
     assert not any(name.startswith("vendor") for name in scripts)
 
