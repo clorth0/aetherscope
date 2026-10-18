@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
 import shutil
 import subprocess
 import time
@@ -18,6 +16,10 @@ from pathlib import Path
 from typing import Callable
 
 from . import telemetry
+from .catalogue import CAPTURES_DIR, IqCaptureEntry, capture_basename
+from .catalogue import delete_capture as _catalogue_delete_capture
+from .catalogue import list_catalogue, redact_location as _catalogue_redact_location
+from .catalogue import sigmf_meta_name, slugify
 from .sigmf import build_sigmf_meta
 from .worker import WorkerLifecycle
 
@@ -25,18 +27,7 @@ log = logging.getLogger(__name__)
 
 HACKRF_TRANSFER = shutil.which("hackrf_transfer") or "/opt/homebrew/bin/hackrf_transfer"
 
-# Captures land next to the repo by default; override with AETHERSCOPE_CAPTURES_DIR
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-CAPTURES_DIR = Path(os.environ.get("AETHERSCOPE_CAPTURES_DIR") or (_REPO_ROOT / "captures"))
-
-
-def _slug(label: str) -> str:
-    s = re.sub(r"[^a-zA-Z0-9._-]+", "_", label.strip())
-    return s.strip("_") or "capture"
-
-
 CAPTURE_MAX_DURATION_S = 600.0
-_CAPTURE_SUFFIXES = (".iq", ".wav", ".json", ".sigmf-meta")
 
 
 @dataclass
@@ -60,39 +51,9 @@ class CaptureConfig:
             raise ValueError("Label must be a string of at most 80 characters")
 
 
-def capture_basename(name: str) -> str | None:
-    """Return the capture stem, or None when the name has a separator or '..'.
-
-    One suffix is stripped, in the order .iq, .wav, .json, .sigmf-meta.
-    Callers still decide which suffix they accept.
-    """
-    if not isinstance(name, str) or "/" in name or ".." in name:
-        return None
-    base = name
-    for suffix in _CAPTURE_SUFFIXES:
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-            break
-    if not base or base in (".", ".."):
-        return None
-    return base
-
-
-@dataclass
-class CaptureRecord:
-    """Metadata for one capture (also written as sidecar JSON)."""
-    name: str
-    path: str
-    sidecar: str
-    freq_hz: int
-    sample_rate: int
-    duration_s: float
-    started_at: float
-    finished_at: float | None
-    file_size: int
-    sample_format: str
-    label: str
-    geolocation: dict | None = None   # capture-time GPS geotag, or None
+# The typed catalogue entry is the capture record: one shape, one home
+# (backend/catalogue.py). Kept under its historical name for callers.
+CaptureRecord = IqCaptureEntry
 
 
 ProgressCallback = Callable[[int, int], None]   # (bytes_written, expected_bytes)
@@ -124,7 +85,7 @@ class IqCapture(WorkerLifecycle):
     def _prepare_start(self) -> None:
         CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
         ts = time.strftime("%Y-%m-%d_%H-%M-%S")
-        label_slug = _slug(self.config.label) if self.config.label else f"{self.config.freq_hz//1_000_000}MHz"
+        label_slug = slugify(self.config.label) if self.config.label else f"{self.config.freq_hz//1_000_000}MHz"
         base = f"{ts}_{label_slug}"
         self._path = CAPTURES_DIR / f"{base}.iq"
         self._sidecar = CAPTURES_DIR / f"{base}.json"
@@ -220,29 +181,16 @@ class IqCapture(WorkerLifecycle):
 
 
 def list_captures() -> list[dict]:
-    """Return all captures in CAPTURES_DIR, newest first."""
-    if not CAPTURES_DIR.exists():
-        return []
-    items: list[dict] = []
-    for sidecar in CAPTURES_DIR.glob("*.json"):
-        try:
-            data = json.loads(sidecar.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        # refresh size from disk in case the run is still in flight
-        try:
-            data["file_size"] = os.path.getsize(data["path"])
-        except OSError:
-            pass
-        items.append(data)
-    items.sort(key=lambda d: d.get("started_at", 0), reverse=True)
-    return items
+    """Return all captures in CAPTURES_DIR, newest first (catalogue dicts)."""
+    return [entry.to_dict() for entry in list_catalogue(CAPTURES_DIR)]
 
 
 def _write_sigmf(record: "CaptureRecord") -> None:
     """Write the companion <base>.sigmf-meta for a capture (best effort)."""
-    base = record.name.removesuffix(".iq")
-    meta_path = CAPTURES_DIR / f"{base}.sigmf-meta"
+    meta_name = sigmf_meta_name(record.name)
+    if meta_name is None:
+        return
+    meta_path = CAPTURES_DIR / meta_name
     try:
         meta_path.write_text(json.dumps(build_sigmf_meta(asdict(record)), indent=2))
     except OSError:
@@ -250,52 +198,10 @@ def _write_sigmf(record: "CaptureRecord") -> None:
 
 
 def redact_location(name: str) -> bool:
-    """Strip the geotag from a capture's sidecar (sets geolocation to null and
-    marks it redacted). Returns True if the sidecar was updated or already
-    redacted. The .iq samples never contain location, so this fully removes it.
-    """
-    base = capture_basename(name)
-    if base is None:
-        return False
-    sc = CAPTURES_DIR / f"{base}.json"
-    try:
-        data = json.loads(sc.read_text())
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not (data.get("geolocation") is None and data.get("geolocation_redacted")):
-        data["geolocation"] = None
-        data["geolocation_redacted"] = True
-        try:
-            sc.write_text(json.dumps(data, indent=2))
-        except OSError:
-            log.exception("failed to redact %s", sc)
-            return False
-    # Scrub the companion SigMF meta too, so the standardized export is clean.
-    meta = CAPTURES_DIR / f"{base}.sigmf-meta"
-    try:
-        m = json.loads(meta.read_text())
-        if m.get("global", {}).pop("core:geolocation", None) is not None:
-            meta.write_text(json.dumps(m, indent=2))
-    except (OSError, json.JSONDecodeError):
-        pass
-    return True
+    """Strip the geotag from a capture's sidecar (catalogue quartet)."""
+    return _catalogue_redact_location(name, CAPTURES_DIR)
 
 
 def delete_capture(name: str) -> bool:
-    """Delete a capture .iq + sidecar by base filename."""
-    base = capture_basename(name)
-    if base is None:
-        return False
-    iq = CAPTURES_DIR / f"{base}.iq"
-    wav = CAPTURES_DIR / f"{base}.wav"
-    sc = CAPTURES_DIR / f"{base}.json"
-    meta = CAPTURES_DIR / f"{base}.sigmf-meta"
-    removed = False
-    for p in (iq, wav, sc, meta):
-        try:
-            if p.exists():
-                p.unlink()
-                removed = True
-        except OSError:
-            log.exception("failed to delete %s", p)
-    return removed
+    """Delete a capture .iq + sidecar by base filename (catalogue quartet)."""
+    return _catalogue_delete_capture(name, CAPTURES_DIR)

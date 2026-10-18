@@ -29,6 +29,7 @@ from flask_socketio import SocketIO, emit
 from .adsb import AdsbConfig, AdsbReceiver
 from .adsb_enrich import icao_to_registration, icao_country
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_basename, delete_capture, list_captures, redact_location
+from .catalogue import find_capture, list_catalogue
 from .gps import GpsClient, coarsen_geolocation
 from .audio_record import start_recording, finalize_recording
 from .decoders import DecodeConfig, Rtl433Decoder
@@ -335,22 +336,29 @@ def _emit_bookmarks() -> None:
 
 
 def _enriched_captures() -> list[dict]:
-    """Return list_captures() items enriched with store annotations + missing flag."""
-    items = list_captures()
+    """Catalogue items enriched with store annotations + missing flag.
+
+    Additive only: sigmf_name is the one server-added derived field —
+    the SigMF companion name, derived once in backend/catalogue.py so
+    the frontend no longer re-derives it. Every other key (including
+    the absolute path, unchanged) is exactly the sidecar's own.
+    """
     anns = get_store().list_capture_annotations()  # one query, dict lookup per item
-    for item in items:
-        name = item.get("name", "")
-        item["kind"] = item.get("kind", "iq")   # audio recordings set kind="audio"
+    items: list[dict] = []
+    for entry in list_catalogue(CAPTURES_DIR):
+        item = entry.to_dict()
+        name = entry.name
+        item["kind"] = entry.kind   # audio entries already carry kind="audio"
         ann = anns.get(name)
         item["user_label"] = ann["user_label"] if ann else ""
         item["notes"] = ann["notes"] if ann else ""
         item["tags"] = ann["tags"] if ann else []
         # Mark missing if the data file (.iq or .wav) no longer exists on disk
-        data_path = CAPTURES_DIR / name if name else None
-        item["missing"] = not (data_path and data_path.exists())
+        item["missing"] = entry.missing_in(CAPTURES_DIR)
         # SigMF applies to IQ captures only, not audio.
-        meta = CAPTURES_DIR / (name[:-3] + ".sigmf-meta") if name.endswith(".iq") else None
-        item["sigmf"] = bool(meta and meta.exists())
+        item["sigmf"] = entry.sigmf_exists_in(CAPTURES_DIR)
+        item["sigmf_name"] = entry.sigmf_name
+        items.append(item)
     return items
 
 
@@ -580,20 +588,16 @@ def _start_scan_radio(cfg: ScanRadioConfig) -> bool:
     return True
 
 
-def _capture_match(name: str):
-    return next((c for c in list_captures() if c.get("name") == name), None)
-
-
 def _start_replay(name: str) -> bool:
     if capture_basename(name) is None:
         _emit_toast("error", "Invalid capture name")
         return False
-    match = _capture_match(name)
-    if not match or not match.get("path") or not os.path.exists(match["path"]):
+    entry = find_capture(name, CAPTURES_DIR)
+    if entry is None or not entry.exists:
         _emit_toast("error", "Capture not found")
         return False
-    center = int(match.get("freq_hz") or 0)
-    sr = int(match.get("sample_rate") or 2_000_000)
+    center = entry.freq_hz
+    sr = getattr(entry, "sample_rate", 2_000_000)  # audio shape has no rate
 
     def on_done(identity: int):
         def _on_done(reason: str) -> None:
@@ -605,7 +609,7 @@ def _start_replay(name: str) -> bool:
 
     def make(identity: int):
         return IqReplay(
-            match["path"], center, sr,
+            entry.path, center, sr,
             on_frame=lambda f0, f1, powers: socketio.emit(
                 "sweep", {"f0": f0, "f1": f1, "powers": powers, "rate_hz": 20.0}),
             on_done=on_done(identity),
@@ -621,14 +625,14 @@ def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
     if capture_basename(name) is None or not name.endswith(".iq"):
         _emit_toast("error", "Invalid capture")
         return False
-    match = _capture_match(name)
-    if not match or not match.get("path") or not os.path.exists(match["path"]):
+    entry = find_capture(name, CAPTURES_DIR)
+    if entry is None or not entry.exists:
         _emit_toast("error", "Capture not found")
         return False
     if demod not in ("fm", "nfm", "am"):
         demod = "fm"
-    sr = int(match.get("sample_rate") or 2_000_000)
-    center = int(match.get("freq_hz") or 0)
+    sr = getattr(entry, "sample_rate", 2_000_000)
+    center = entry.freq_hz
 
     def on_done(identity: int):
         def _on_done(reason: str) -> None:
@@ -640,7 +644,7 @@ def _start_iq_play(name: str, demod: str, offset_hz: float) -> bool:
 
     def make(identity: int):
         return IqAudioPlayer(
-            match["path"], sr, demod, offset_hz,
+            entry.path, sr, demod, offset_hz,
             on_audio=lambda pcm: socketio.emit("radio_audio", pcm),
             on_done=on_done(identity),
         )
@@ -657,12 +661,12 @@ def _start_decode_file(name: str) -> bool:
     if capture_basename(name) is None or not name.endswith(".iq"):
         _emit_toast("error", "Invalid capture")
         return False
-    match = _capture_match(name)
-    if not match or not match.get("path") or not os.path.exists(match["path"]):
+    entry = find_capture(name, CAPTURES_DIR)
+    if entry is None or not entry.exists:
         _emit_toast("error", "Capture not found")
         return False
-    sr = int(match.get("sample_rate") or 2_000_000)
-    center = int(match.get("freq_hz") or 0)
+    sr = getattr(entry, "sample_rate", 2_000_000)
+    center = entry.freq_hz
 
     def on_done(identity: int):
         def _on_done(reason: str) -> None:
@@ -676,7 +680,7 @@ def _start_decode_file(name: str) -> bool:
 
     def make(identity: int):
         return IqFileDecoder(
-            match["path"], sr, center,
+            entry.path, sr, center,
             on_event=_emit_event,
             on_done=on_done(identity),
         )

@@ -10,30 +10,17 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 import time
 import wave
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 
+from .catalogue import AudioCaptureEntry, slugify
 
-@dataclass
-class AudioRecord:
-    """Sidecar metadata for one audio recording (kind == 'audio')."""
-    kind: str
-    name: str
-    path: str
-    sidecar: str
-    freq_hz: int
-    demod: str
-    audio_rate: int
-    started_at: float
-    finished_at: float | None
-    file_size: int
-    duration_s: float
-    label: str
-    geolocation: dict | None = None
+# The typed catalogue entry is the audio record: one shape, one home
+# (backend/catalogue.py). Kept under its historical name for callers.
+AudioRecord = AudioCaptureEntry
 
 
 class WavRecorder:
@@ -87,17 +74,12 @@ class WavRecorder:
             return 0
 
 
-def _slug(label: str) -> str:
-    s = re.sub(r"[^a-zA-Z0-9._-]+", "_", (label or "").strip())
-    return s.strip("_") or "audio"
-
-
 def start_recording(captures_dir, now, freq_hz, demod, audio_rate, label, geolocation):
     """Open a WAV recorder + write the initial sidecar. Returns (recorder, record)."""
     captures_dir = Path(captures_dir)
     captures_dir.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(now))
-    tag = _slug(label) if label else f"{int(freq_hz) // 1_000_000}MHz"
+    tag = slugify(label, fallback="audio") if label else f"{int(freq_hz) // 1_000_000}MHz"
     base = f"{ts}_{tag}"
     path = captures_dir / f"{base}.wav"
     sidecar = captures_dir / f"{base}.json"

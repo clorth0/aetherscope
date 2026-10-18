@@ -87,7 +87,9 @@ def test_handlers_do_not_repeat_the_constructor_checks():
     assert "capture_config_error" not in app
     assert app.count("capture_basename(") == 3
     capture = (ROOT / "backend" / "capture.py").read_text()
-    assert capture.count("capture_basename(") == 3
+    assert capture.count("capture_basename(") == 0  # moved to the catalogue
+    catalogue = (ROOT / "backend" / "catalogue.py").read_text()
+    assert catalogue.count("capture_basename(") >= 3  # definition + redact/delete
     assert '"/" in name or ".." in name' not in app
 
 
