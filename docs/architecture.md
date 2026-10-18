@@ -39,10 +39,18 @@
 - **GPS geotagging (optional, opt-in).** `gps.py` reads a local gpsd over a raw
   socket (`AETHERSCOPE_GPSD_HOST`/`PORT`, default 127.0.0.1:2947), only while the
   `gps_enabled` toggle is on (`AETHERSCOPE_GPS=0` hard-disables it). When a fresh
-  fix exists, captures are stamped with a full-precision `geolocation` in their
-  sidecar; a per-capture redaction action scrubs it. Position is pushed live as
-  `gps_status`; lat/lon never reach the logs. Capture timestamps stay on the
-  system clock (the puck has no PPS).
+  fix exists, captures are stamped with a `geolocation` in their
+  sidecar at the stored precision (`gps_precision`, default full -- the
+  operator's own files keep their choice); a per-capture redaction action
+  scrubs it. Position is pushed live as `gps_status`, but broadcast and
+  stored precision are split at the emission seam in `gps.py`
+  (`broadcast_position` / `broadcast_geolocation`): every `gps_status`,
+  emitted capture geolocation, and ISM-contact location crosses at the
+  broadcast precision (`gps_broadcast_precision`, default ~1 km, failing
+  closed to coarse on unknown values), and full-precision broadcast is an
+  explicit opt-in only. ADS-B contact locations are the aircraft's, not
+  the receiver's, and are not coarsened. lat/lon never reach the logs.
+  Capture timestamps stay on the system clock (the puck has no PPS).
 - **SigMF export.** Alongside each capture's `.iq` + UI sidecar, `sigmf.py`
   writes a companion `<base>.sigmf-meta` (SigMF 1.0.0) referencing the `.iq` via
   `core:dataset`, so recordings are portable to other SDR tools. Any geotag rides

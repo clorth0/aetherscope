@@ -261,7 +261,7 @@ function renderGps(s) {
     // Coords masked on screen; revealed only on hover, leading with "ON".
     const alt = state.gps.alt != null ? ` · ${state.gps.alt.toFixed(0)} m` : "";
     const hd = state.gps.hdop != null ? `\nhdop ${state.gps.hdop}` : "";
-    gpsPill.title = `Geotagging ON — captures are stamped with your location.\n` +
+    gpsPill.title = `Geotagging ON — captures are stamped per stored precision; live location is broadcast to connected browsers at live-broadcast precision.\n` +
       `${state.gps.lat.toFixed(6)}, ${state.gps.lon.toFixed(6)}${alt}${hd}\nClick to disable.`;
   } else {
     gpsDot.classList.add("warn");
@@ -275,6 +275,13 @@ socket.on("gps_status", renderGps);
 gpsPill.addEventListener("click", () => {
   socket.emit("set_setting", { key: "gps_enabled", value: !state.gps.enabled });
 });
+
+const gpsBroadcastPrecisionEl = document.getElementById("gps-broadcast-precision");
+if (gpsBroadcastPrecisionEl) {
+  gpsBroadcastPrecisionEl.addEventListener("change", () => {
+    socket.emit("set_setting", { key: "gps_broadcast_precision", value: gpsBroadcastPrecisionEl.value });
+  });
+}
 
 const gpsPrecisionEl = document.getElementById("gps-precision");
 if (gpsPrecisionEl) {
@@ -300,6 +307,10 @@ socket.on("status", (s) => {
     if (st.gps_precision) {
       const gpe = document.getElementById("gps-precision");
       if (gpe) gpe.value = st.gps_precision;
+    }
+    if (st.gps_broadcast_precision) {
+      const gbe = document.getElementById("gps-broadcast-precision");
+      if (gbe) gbe.value = st.gps_broadcast_precision;
     }
   }
 

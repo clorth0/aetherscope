@@ -69,9 +69,17 @@ def sky_fields(obj: dict) -> dict:
     return out
 
 
-# Stored-geotag precision: a privacy control over what lands in capture files.
-# The live (local) display always shows full precision.
+# Geotag precision has two different jobs, with different defaults:
+# - Stored precision (gps_precision, default "full"): what lands in the
+#   operator's own capture files. Their recordings, their choice; a default
+#   flip must not silently degrade them.
+# - Broadcast precision (gps_broadcast_precision, default "1km"): what is
+#   emitted on gps_status / capture & ISM-contact payloads to every
+#   connected socket. A socket is not the operator's own file -- any local
+#   process (loopback, no token) or any token holder can connect -- so the
+#   safe default is coarse and full precision is an explicit opt-in.
 _PRECISION_DECIMALS = {"full": None, "100m": 3, "1km": 2}
+DEFAULT_BROADCAST_PRECISION = "1km"
 
 
 def coarsen_geolocation(geo: dict | None, precision: str) -> dict | None:
@@ -93,6 +101,34 @@ def coarsen_geolocation(geo: dict | None, precision: str) -> dict | None:
         out["lon"] = round(out["lon"], dec)
     out["precision"] = "~100m" if dec == 3 else "~1km"
     return out
+
+
+def _broadcast_precision(precision: str | None) -> str:
+    """Normalise a broadcast precision, failing closed to coarse."""
+    return precision if precision in _PRECISION_DECIMALS else DEFAULT_BROADCAST_PRECISION
+
+
+def broadcast_position(position: dict, precision: str | None = None) -> dict:
+    """A gps_status payload safe to emit to all connected sockets.
+
+    Coarsens lat/lon to the broadcast precision (default ~1 km); only an
+    explicit "full" opt-in emits exact coordinates. Never mutates input.
+    """
+    out = dict(position)
+    geo = coarsen_geolocation(
+        {"lat": out.get("lat"), "lon": out.get("lon")},
+        _broadcast_precision(precision),
+    )
+    out["lat"], out["lon"] = geo["lat"], geo["lon"]
+    out["precision"] = geo["precision"]
+    return out
+
+
+def broadcast_geolocation(geo: dict | None, precision: str | None = None) -> dict | None:
+    """Broadcast-safe copy of a stored geolocation (stored dict unchanged)."""
+    if geo is None:
+        return None
+    return coarsen_geolocation(dict(geo), _broadcast_precision(precision))
 
 
 def split_json_lines(buf: bytes) -> tuple[list, bytes]:
