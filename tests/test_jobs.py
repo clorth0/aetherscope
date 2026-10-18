@@ -88,14 +88,16 @@ def test_failed_start_leaves_the_board_idle_and_stops_the_worker():
 def test_file_job_does_not_own_the_device():
     _reset()
     app._device["info"] = None
-    worker = _Worker(value="played")
+    worker = _Worker(value=True)
 
     def make(_identity):
         return worker
 
     ok, value = app._begin_job("replay", make)
     assert ok is True
-    assert value == "played"
+    # Uniform contract: _begin_job hands back the worker, not a
+    # mode-specific start() return value (capture's record used to leak here).
+    assert value is worker
     assert app._jobs.mode() == "replay"
     assert app._jobs.status_label() == "Replaying"
     assert app._jobs.uses_device() is False

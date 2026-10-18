@@ -387,10 +387,7 @@ def _emit_scan(name: str, payload: dict) -> None:
 # ------------------------------------------------------------------
 
 def _halt(worker) -> None:
-    if hasattr(worker, "cancel"):
-        worker.cancel()
-    else:
-        worker.stop()
+    worker.stop()
 
 
 def _stop_all_locked() -> None:
@@ -433,12 +430,13 @@ def _exit_handler(identity: int, kind: str):
 
 
 def _begin_job(kind: str, make):
-    """Stop the previous job, start the worker, and publish only if start() returns.
+    """Stop the previous job, start the worker, and publish it.
 
-    make(identity) builds the worker and does not start it. Returns
-    (True, start_value) when the job is published. start_value may be None.
-    Returns (False, None) when the device is missing or start fails. A failed
-    start leaves the board idle.
+    make(identity) builds the worker and does not start it. Every worker's
+    start() returns True when it started (the uniform contract; a fresh
+    worker is never already running). Returns (True, worker) when the job
+    is published, (False, None) when the device is missing or start fails.
+    A failed start leaves the board idle.
     """
     spec = mode_spec(kind)
     if spec.uses_device and _device["info"] is None:
@@ -454,7 +452,9 @@ def _begin_job(kind: str, make):
             _emit_toast("error", f"Could not start {spec.death_label.lower()}")
             return False, None
         try:
-            value = worker.start()
+            started = worker.start()
+            if not started:
+                raise RuntimeError("worker already running")
         except Exception:
             try:
                 _halt(worker)
@@ -465,7 +465,7 @@ def _begin_job(kind: str, make):
             return False, None
         _jobs.publish(kind, worker, lambda w=worker: _halt(w), identity)
     _emit_status()
-    return True, value
+    return True, worker
 
 
 def _start_sweep(cfg: SweepConfig) -> bool:
@@ -520,10 +520,10 @@ def _start_capture(cfg: CaptureConfig) -> bool:
             geolocation=geo,
         )
 
-    ok, value = _begin_job("capture", make)
+    ok, worker = _begin_job("capture", make)
     if not ok:
         return False
-    socketio.emit("capture_started", {"record": asdict(value)})
+    socketio.emit("capture_started", {"record": asdict(worker.record)})
     return True
 
 
@@ -943,7 +943,7 @@ def on_cancel_capture():
         capture = _jobs.worker("capture")
         if capture is not None:
             try:
-                capture.cancel()
+                capture.stop()
             except Exception:
                 log.exception("cancel_capture failed")
 

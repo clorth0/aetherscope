@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 import math
-import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -25,6 +24,7 @@ import numpy as np
 from .adsb import AdsbConfig, AdsbReceiver
 from .decoders import DecodeConfig, Rtl433Decoder
 from .sdr import SweepConfig, SweepStreamer
+from .worker import WorkerLifecycle
 
 log = logging.getLogger(__name__)
 
@@ -123,33 +123,21 @@ class PhaseSummary:
 # ------------------------------------------------------------------
 # Auto-scanner
 # ------------------------------------------------------------------
-class AutoScanner:
+class AutoScanner(WorkerLifecycle):
     def __init__(self, config: ScanConfig, on_event: EventCallback):
         self.config = config
         self.on_event = on_event
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        super().__init__()
         self._current_job: Any = None
         self._phases: list[PhaseSummary] = []
 
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
+    def _cleanup_on_stop(self) -> None:
         if self._current_job:
             try:
                 self._current_job.stop()
             except Exception:
                 pass
         self._current_job = None
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
 
     def _emit(self, name: str, payload: dict) -> None:
         try:

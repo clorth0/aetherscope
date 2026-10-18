@@ -54,7 +54,9 @@ Content-Security-Policy, so the app shell works fully offline.
 
 ## Layout
 
-- `backend/`: Flask app (`app.py`), the single job board (`jobs.py`), per-mode subprocess wrappers
+- `backend/`: Flask app (`app.py`), the single job board (`jobs.py`), the one
+  worker lifecycle (`worker.py`: start/stop/is_running, terminate->wait->kill,
+  and completed-vs-died outcome mapping behind one interface), per-mode subprocess wrappers
   (`sdr.py`, `radio.py`, `decoders.py`, `adsb.py`, `capture.py`, `scan.py`),
   offline `replay.py`, snap-to-peak `tuning.py`, SQLite `store.py`,
   optional gpsd geotagging `gps.py`, SigMF export `sigmf.py`,

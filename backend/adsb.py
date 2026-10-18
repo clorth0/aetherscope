@@ -13,13 +13,14 @@ import math
 import shutil
 import subprocess
 import tempfile
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 log = logging.getLogger(__name__)
+
+from .worker import WorkerLifecycle
 
 READSB = (
     shutil.which("readsb-hackrf")
@@ -63,7 +64,7 @@ AircraftCallback = Callable[[list[dict], dict], None]   # (aircraft, meta)
 ExitCallback     = Callable[[str], None]
 
 
-class AdsbReceiver:
+class AdsbReceiver(WorkerLifecycle):
     def __init__(
         self,
         config: AdsbConfig,
@@ -73,33 +74,14 @@ class AdsbReceiver:
         self.config = config
         self.on_update = on_update
         self.on_exit = on_exit
-        self._proc: subprocess.Popen | None = None
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        # ADS-B waited 3 s for readsb (the rest wait 2 s): intentional.
+        super().__init__(wait_timeout=3)
         self._tmp: Path | None = None
 
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-        self._proc = None
+    def _cleanup_on_stop(self) -> None:
         if self._tmp:
             shutil_rmtree_safe(self._tmp)
             self._tmp = None
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
 
     def _run(self) -> None:
         c = self.config
@@ -151,12 +133,7 @@ class AdsbReceiver:
                 break
 
         log.info("adsb receiver exiting")
-        if self.on_exit:
-            reason = "stopped" if self._stop.is_set() else "died"
-            try:
-                self.on_exit(reason)
-            except Exception:
-                log.exception("on_exit callback failed")
+        self.emit_exit(self.on_exit, completed=False)
 
 
 def shutil_rmtree_safe(path: Path) -> None:

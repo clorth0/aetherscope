@@ -10,7 +10,6 @@ streams that audio to the browser AudioWorklet, paced to real time. Device-free
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from math import gcd
 
@@ -19,6 +18,7 @@ from scipy.signal import resample_poly
 
 from .radio import AUDIO_RATE, FS_IN, demodulate, make_state
 from .replay import cs8_to_complex
+from .worker import WorkerLifecycle
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ def shift_and_resample(iq, capture_rate, offset_hz, out_rate=FS_IN, start_sample
     return resample_poly(iq, up, down).astype(np.complex64)
 
 
-class IqAudioPlayer:
+class IqAudioPlayer(WorkerLifecycle):
     """Demodulate a saved .iq to audio and stream it, paced to real time."""
 
     def __init__(self, path, capture_rate, demod, offset_hz, on_audio, on_done=None):
@@ -57,21 +57,7 @@ class IqAudioPlayer:
         self.on_audio = on_audio
         self.on_done = on_done
         self.block_samples = max(1, self.capture_rate // 10)  # ~0.1 s of input
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
+        super().__init__()
 
     def _run(self) -> None:
         state = make_state(self.demod)
@@ -106,8 +92,4 @@ class IqAudioPlayer:
                         break
         except OSError:
             log.exception("iq playback read failed: %s", self.path)
-        if self.on_done:
-            try:
-                self.on_done("stopped" if self._stop.is_set() else "completed")
-            except Exception:
-                log.exception("on_done failed")
+        self.emit_exit(self.on_done, completed=True)
