@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-import threading
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -26,6 +25,7 @@ import numpy as np
 from scipy.signal import firwin, lfilter
 
 from . import telemetry
+from .worker import WorkerLifecycle
 
 log = logging.getLogger(__name__)
 
@@ -174,7 +174,7 @@ SignalCallback = Callable[[float], None]  # channel power in dBFS
 ExitCallback = Callable[[str], None]  # reason: "stopped" | "died"
 
 
-class RadioReceiver:
+class RadioReceiver(WorkerLifecycle):
     def __init__(
         self,
         config: RadioConfig,
@@ -186,17 +186,8 @@ class RadioReceiver:
         self.on_audio = on_audio
         self.on_exit = on_exit
         self.on_signal = on_signal
-        self._proc: subprocess.Popen | None = None
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        super().__init__()
         self._last_iq: np.ndarray | None = None
-
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
 
     def latest_iq(self) -> np.ndarray | None:
         """Most recent complex baseband block, or None before any arrives.
@@ -205,19 +196,6 @@ class RadioReceiver:
         is atomic in CPython, so no lock is needed.
         """
         return self._last_iq
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-        self._proc = None
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
 
     def _run(self) -> None:
         c = self.config
@@ -273,12 +251,7 @@ class RadioReceiver:
             block_i += 1
 
         log.info("radio receiver exiting")
-        if self.on_exit:
-            reason = "stopped" if self._stop.is_set() else "died"
-            try:
-                self.on_exit(reason)
-            except Exception:
-                log.exception("on_exit callback failed")
+        self.emit_exit(self.on_exit, completed=False)
 
 
 @dataclass
@@ -296,7 +269,7 @@ ScanEventCallback = Callable[[str, dict], None]
 _HANG_S = 1.5  # keep listening this long after the signal drops below squelch
 
 
-class RadioScanner:
+class RadioScanner(WorkerLifecycle):
     """Cycle a list of frequencies; when channel power exceeds the squelch,
     hold and stream audio until it drops, then resume. Retuning means
     respawning hackrf_transfer, so the cycle runs at roughly a couple of
@@ -308,32 +281,12 @@ class RadioScanner:
         self.on_audio = on_audio
         self.on_event = on_event
         self.on_exit = on_exit
-        self._proc: subprocess.Popen | None = None
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        self._kill()
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
+        super().__init__()
 
     def _kill(self) -> None:
-        if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-        self._proc = None
+        # Per-retune teardown: kill the current subprocess without
+        # flagging the worker stopped (the scan keeps cycling).
+        self._terminate_proc()
 
     def _spawn(self, freq_hz: int) -> None:
         c = self.config
@@ -414,5 +367,4 @@ class RadioScanner:
         finally:
             self._kill()
             log.info("radio scanner exiting")
-            if self.on_exit:
-                self.on_exit("stopped" if self._stop.is_set() else "died")
+            self.emit_exit(self.on_exit, completed=False)

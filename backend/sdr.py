@@ -9,13 +9,13 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-import threading
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Iterator
 
 import numpy as np
 
 from . import telemetry
+from .worker import WorkerLifecycle
 
 log = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ def assemble_sweeps(lines: Iterable[str]) -> Iterator[tuple[np.ndarray, np.ndarr
             accumulators[f] = p
 
 
-class SweepStreamer:
+class SweepStreamer(WorkerLifecycle):
     def __init__(
         self,
         config: SweepConfig,
@@ -104,30 +104,8 @@ class SweepStreamer:
         self.config = config
         self.on_sweep = on_sweep
         self.on_exit = on_exit
-        self._proc: subprocess.Popen | None = None
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        super().__init__()
         self._got_data = False
-
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-        self._proc = None
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
 
     def _run(self) -> None:
         c = self.config
@@ -174,10 +152,5 @@ class SweepStreamer:
                 log.exception("on_sweep callback failed")
 
         log.info("sweep streamer exiting")
-        if self.on_exit:
-            reason = "stopped" if self._stop.is_set() else "died"
-            try:
-                self.on_exit(reason)
-            except Exception:
-                log.exception("on_exit callback failed")
+        self.emit_exit(self.on_exit, completed=False)
 

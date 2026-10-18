@@ -14,12 +14,13 @@ import os
 import shutil
 import subprocess
 import tempfile
-import threading
 
 import numpy as np
 
 from .iq_playback import shift_and_resample
 from .replay import cs8_to_complex
+
+from .worker import WorkerLifecycle
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def _convert(path, capture_rate, out_path, stop=None) -> None:
             dst.write(to_cu8(res))
 
 
-class IqFileDecoder:
+class IqFileDecoder(WorkerLifecycle):
     """Run rtl_433 over a saved .iq (resampled/converted), one-shot."""
 
     def __init__(self, path, capture_rate, center_hz, on_event, on_done=None):
@@ -61,32 +62,11 @@ class IqFileDecoder:
         self.center_hz = int(center_hz)
         self.on_event = on_event
         self.on_done = on_done
-        self._proc: subprocess.Popen | None = None
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        super().__init__()
         self._tmp: str | None = None
 
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        p = self._proc
-        if p and p.poll() is None:
-            p.terminate()
-            try:
-                p.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                p.kill()
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
-
     def _run(self) -> None:
+        failed = False
         reason = "completed"
         try:
             fd, self._tmp = tempfile.mkstemp(suffix=".cu8")
@@ -120,16 +100,22 @@ class IqFileDecoder:
                     reason = "stopped"
         except FileNotFoundError:
             log.error("rtl_433 not found at %s", RTL_433)
-            reason = "died"
+            failed = True
         except Exception:
             log.exception("file decode failed")
-            reason = "died"
+            failed = True
         finally:
             if self._tmp and os.path.exists(self._tmp):
                 try:
                     os.unlink(self._tmp)
                 except OSError:
                     pass
+        if failed:
+            reason = "died"
+        elif reason != "completed":
+            reason = self.outcome(completed=False)
+        else:
+            reason = self.outcome(completed=True)
         if self.on_done:
             try:
                 self.on_done(reason)

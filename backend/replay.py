@@ -8,12 +8,13 @@ plays it back. No HackRF needed.
 from __future__ import annotations
 
 import logging
-import threading
 from typing import Callable
 
 import numpy as np
 
 log = logging.getLogger(__name__)
+
+from .worker import WorkerLifecycle
 
 
 def cs8_to_complex(raw: bytes) -> np.ndarray:
@@ -45,7 +46,7 @@ FrameCallback = Callable[[float, float, list], None]  # (f0_hz, f1_hz, powers)
 DoneCallback = Callable[[str], None]                   # "completed" | "stopped"
 
 
-class IqReplay:
+class IqReplay(WorkerLifecycle):
     def __init__(self, path, center_hz, sample_rate, on_frame,
                  on_done=None, fps=20, fft_size=1024):
         self.path = path
@@ -55,21 +56,7 @@ class IqReplay:
         self.on_done = on_done
         self.fps = fps
         self.fft_size = fft_size
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
+        super().__init__()
 
     def _run(self) -> None:
         f0 = self.center_hz - self.sample_rate / 2.0
@@ -92,5 +79,4 @@ class IqReplay:
                         break
         except OSError:
             log.exception("replay read failed: %s", self.path)
-        if self.on_done:
-            self.on_done("stopped" if self._stop.is_set() else "completed")
+        self.emit_exit(self.on_done, completed=True)

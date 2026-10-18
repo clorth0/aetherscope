@@ -12,7 +12,6 @@ import os
 import re
 import shutil
 import subprocess
-import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -20,6 +19,7 @@ from typing import Callable
 
 from . import telemetry
 from .sigmf import build_sigmf_meta
+from .worker import WorkerLifecycle
 
 log = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ DoneCallback     = Callable[[CaptureRecord, str], None]  # (record, reason)
 # reason: "completed" | "cancelled" | "died"
 
 
-class IqCapture:
+class IqCapture(WorkerLifecycle):
     SAMPLE_BYTES = 2  # cs8: 1 byte I + 1 byte Q
 
     def __init__(
@@ -114,15 +114,14 @@ class IqCapture:
         self.on_progress = on_progress
         self.on_done = on_done
         self._geolocation = geolocation
-        self._proc: subprocess.Popen | None = None
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        super().__init__()
+        self.record: CaptureRecord | None = None
         self._path: Path | None = None
         self._sidecar: Path | None = None
         self._started_at = 0.0
         self._expected_bytes = 0
 
-    def start(self) -> CaptureRecord:
+    def _prepare_start(self) -> None:
         CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
         ts = time.strftime("%Y-%m-%d_%H-%M-%S")
         label_slug = _slug(self.config.label) if self.config.label else f"{self.config.freq_hz//1_000_000}MHz"
@@ -133,27 +132,9 @@ class IqCapture:
         self._started_at = time.time()
         self._expected_bytes = int(self.config.duration_s * self.config.sample_rate * self.SAMPLE_BYTES)
 
-        record = self._make_record(finished_at=None, file_size=0)
-        self._sidecar.write_text(json.dumps(asdict(record), indent=2))
-        _write_sigmf(record)
-
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        return record
-
-    def cancel(self) -> None:
-        self._stop.set()
-        if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-        self._proc = None
-
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
+        self.record = self._make_record(finished_at=None, file_size=0)
+        self._sidecar.write_text(json.dumps(asdict(self.record), indent=2))
+        _write_sigmf(self.record)
 
     def _make_record(self, finished_at: float | None, file_size: int) -> CaptureRecord:
         return CaptureRecord(
@@ -217,11 +198,14 @@ class IqCapture:
 
         final_size = self._path.stat().st_size if self._path.exists() else 0
         finished_at = time.time()
-        reason = "cancelled" if self._stop.is_set() else (
-            "completed" if final_size >= self._expected_bytes * 0.95 else "died"
+        # Capture's stopped reason is "cancelled" (intentional, per-mode).
+        reason = self.outcome(
+            completed=final_size >= self._expected_bytes * 0.95,
+            stopped_reason="cancelled",
         )
 
         record = self._make_record(finished_at=finished_at, file_size=final_size)
+        self.record = record
         try:
             self._sidecar.write_text(json.dumps(asdict(record), indent=2))
         except Exception:
