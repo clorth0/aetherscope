@@ -21,6 +21,15 @@
   `hackrf_sweep` cycle.
 - **Telemetry.** Subprocess stderr (drops/overruns) plus server counters
   (sweeps computed vs emitted, subprocess deaths) feed the Diagnostics panel.
+- **Auth boundary.** `auth.py` is the deep module behind who may drive
+  the SDR: one `AuthPolicy` (bind host + optional `AETHERSCOPE_TOKEN`)
+  decides whether auth is required, refuses a non-loopback bind without
+  a token at startup, checks tokens in constant time, and issues the
+  HttpOnly signed cookie the browser exchanges its token for. Loopback
+  with no token keeps the historical no-auth behaviour. Enforcement has
+  two seams over that one interface: a Flask `before_request` gate for
+  HTTP (capture routes included) and the Socket.IO `connect` handler,
+  which every socket handler sits behind.
 - **Data layer.** `store.py` is a small stdlib-`sqlite3` module (single file at
   `AETHERSCOPE_DATA_DIR`, default `~/.local/share/aetherscope/`) holding
   bookmarks, persisted UI settings, capture annotations, and a persistent
@@ -98,6 +107,7 @@ Content-Security-Policy, so the app shell works fully offline.
 ## Layout
 
 - `backend/`: Flask app (`app.py`), the mode-config vocabulary
+  the auth-boundary module (`auth.py`), the mode-config vocabulary
   (`config.py`: the demod set and its bookmark subset — field lists
   themselves stay with the per-mode dataclasses), the single job board (`jobs.py`), the one
   worker lifecycle (`worker.py`: start/stop/is_running, terminate->wait->kill,

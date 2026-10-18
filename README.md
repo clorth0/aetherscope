@@ -78,9 +78,10 @@ TLS + auth in front (Caddy recipe) or run the Linux container. See
 
 ## Security
 
-Localhost-only by design, with no built-in authentication; websockets are
-restricted to the same origin. Do not put it on a public interface without your
-own access controls (TLS + auth in front). GPS geotagging is **opt-in and off by
+Localhost-only by default; websockets are restricted to the same origin.
+Setting `AETHERSCOPE_TOKEN` turns on token auth, and a non-loopback bind
+without a token is refused at startup. Do not put it on a public interface
+without your own access controls (TLS + auth in front). GPS geotagging is **opt-in and off by
 default** — when enabled, captures are stamped with your location, with
 per-capture redaction and precision coarsening. Report issues privately via the
 repository's Security tab. See [SECURITY.md](SECURITY.md).

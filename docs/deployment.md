@@ -1,8 +1,11 @@
 # Deployment
 
-Aetherscope binds `127.0.0.1` and has no built-in authentication. Reach it over
-Tailscale or an `ssh -L` tunnel with no extra setup, or front it with a reverse
-proxy for TLS and auth. Do not put it on a public interface directly.
+Aetherscope binds `127.0.0.1` by default and needs no auth there. Setting
+`AETHERSCOPE_TOKEN` enables its built-in token auth (gate page + HttpOnly
+cookie), and any non-loopback bind requires that token or the app refuses to
+start. Reach loopback over Tailscale or an `ssh -L` tunnel with no extra setup,
+or front it with a reverse proxy for TLS. Do not put it on a public interface
+directly.
 
 ## Reverse proxy + auth (Caddy)
 
@@ -25,13 +28,15 @@ native install ([install.md](install.md)). On Linux, USB passthrough works:
 docker compose up --build
 # or:
 docker build -t aetherscope .
-docker run --rm --device=/dev/bus/usb -p 127.0.0.1:8765:8765 aetherscope
+docker run --rm --device=/dev/bus/usb -e AETHERSCOPE_TOKEN='<long random value>' -p 127.0.0.1:8765:8765 aetherscope
 ```
 
 Notes:
 
 - The container binds `0.0.0.0` internally (via `AETHERSCOPE_HOST`) but publishes
-  only to `127.0.0.1:8765`. Reach it over Tailscale/SSH or front it with Caddy.
+  only to `127.0.0.1:8765`. `AETHERSCOPE_TOKEN` must be set or the app refuses
+  to start; enter that token once on the gate page. Reach it over Tailscale/SSH
+  or front it with Caddy.
 - It runs as a non-root user, so USB access may need a host udev rule plus
   `--group-add plugdev`, or `--privileged` as a fallback.
 - Captures persist in `./captures`.

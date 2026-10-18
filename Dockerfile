@@ -6,7 +6,9 @@
 #
 # Keep the published port bound to 127.0.0.1 and reach it over Tailscale or an
 # SSH tunnel (same posture as the native install), or front it with the Caddy
-# recipe in deploy/Caddyfile.example.
+# recipe in deploy/Caddyfile.example. The image binds 0.0.0.0 inside the
+# container, so AETHERSCOPE_TOKEN MUST be set at run time or the app refuses
+# to start: docker run -e AETHERSCOPE_TOKEN='<long random value>' ...
 #
 # NOTE: provided as a starting point; not yet verified on a real Linux + HackRF
 # host. The readsb (ADS-B) build deps follow the wiedehopf/readsb docs.
@@ -45,6 +47,7 @@ RUN useradd --create-home --uid 1000 aether \
 USER aether
 
 # Bind all interfaces inside the container; publish only to 127.0.0.1 on the host.
+# The app refuses this bind without AETHERSCOPE_TOKEN (see above).
 ENV AETHERSCOPE_HOST=0.0.0.0 \
     AETHERSCOPE_CAPTURES_DIR=/captures
 VOLUME ["/captures"]
