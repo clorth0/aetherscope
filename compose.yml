@@ -3,6 +3,10 @@
 services:
   aetherscope:
     build: .
+    environment:
+      # Required: the container binds 0.0.0.0 and the app refuses to start
+      # without a token. Export it first: AETHERSCOPE_TOKEN=... docker compose up
+      - AETHERSCOPE_TOKEN=${AETHERSCOPE_TOKEN:-}
     devices:
       - /dev/bus/usb            # pass the HackRF through (Linux only)
     ports:

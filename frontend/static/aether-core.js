@@ -5,7 +5,15 @@
 // each other's globals. Loaded first; see index.html for load order.
 "use strict";
 window.Aether = (function () {
-  const socket = io();
+  const socket = io({ withCredentials: true });
+  // Auth (when AETHERSCOPE_TOKEN is set): the HttpOnly gate cookie rides
+  // this connection. If it is gone/rejected, / answers 401 and the gate
+  // page at / is where the token is re-entered.
+  socket.io.on("error", () => {
+    fetch("/api/captures", { credentials: "same-origin" })
+      .then((r) => { if (r.status === 401) window.location.assign("/"); })
+      .catch(() => {});
+  });
 
   const statusDot = document.getElementById("status-dot");
   const statusText = document.getElementById("status-text");

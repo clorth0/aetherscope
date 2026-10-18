@@ -23,10 +23,11 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
-from flask import Flask, jsonify, render_template, send_from_directory
+from flask import Flask, jsonify, make_response, redirect, render_template, request, send_from_directory
 from flask_socketio import SocketIO, emit
 
 from .adsb import AdsbConfig, AdsbReceiver
+from .auth import COOKIE_MAX_AGE_S, COOKIE_NAME, AuthConfigError, AuthPolicy, render_gate
 from .adsb_enrich import icao_to_registration, icao_country
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_basename, delete_capture, list_captures, redact_location
 from .catalogue import find_capture, list_catalogue
@@ -91,6 +92,29 @@ _allowed_origins = resolve_allowed_origins(os.environ.get("AETHERSCOPE_ALLOWED_O
 # only). An empty list would instead DISABLE the origin check, letting any page in
 # the browser drive the SDR over the websocket, so default to None.
 socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=_allowed_origins)
+
+# The auth boundary (backend/auth.py): loopback + no token means no auth,
+# as before; a token or a non-loopback bind makes auth required, and a
+# non-loopback bind without a token is refused in main(). Handlers and
+# routes read this global at request time so tests can swap the policy.
+_auth_policy = AuthPolicy.from_env(os.environ)
+
+
+@app.before_request
+def _auth_gate():
+    """HTTP seam of the auth boundary; the socket seam is on_connect."""
+    if not _auth_policy.requires_auth:
+        return None
+    # The Socket.IO handshake carries its credentials to on_connect, which
+    # is the enforcement point there; gating the handshake here would
+    # break the socket auth payload, so it is exempt from this seam.
+    if request.path.startswith("/socket.io/") or request.path == "/auth/token":
+        return None
+    if request.path == "/":
+        return None  # the index view serves the gate or the shell
+    if _auth_policy.is_authenticated(headers=request.headers, cookies=request.cookies):
+        return None
+    return jsonify({"error": "authentication required"}), 401
 
 # Server-startup timestamp used to bust browser caches whenever the
 # service restarts (so users can't get stuck on stale JS/CSS).
@@ -722,7 +746,33 @@ def _shutdown(*_args) -> None:
 
 @app.route("/")
 def index():
+    if _auth_policy.requires_auth and not _auth_policy.is_authenticated(
+        headers=request.headers, cookies=request.cookies
+    ):
+        return render_gate()
     return render_template("index.html")
+
+
+@app.route("/auth/token", methods=["POST"])
+def auth_token():
+    """Exchange the shared token for an HttpOnly signed cookie.
+
+    The gate page POSTs here; the cookie (never the raw token) is what
+    the browser then presents to HTTP routes and the socket handshake.
+    """
+    if not _auth_policy.requires_auth:
+        return redirect("/")
+    payload = request.get_json(silent=True) or {}
+    candidate = request.form.get("token") or payload.get("token")
+    if not _auth_policy.check_token(candidate):
+        return make_response(render_gate(error=True), 401)
+    resp = make_response(redirect("/"))
+    resp.set_cookie(
+        COOKIE_NAME, _auth_policy.make_cookie_value(),
+        max_age=COOKIE_MAX_AGE_S, httponly=True, samesite="Strict",
+        secure=request.is_secure, path="/",
+    )
+    return resp
 
 
 @app.route("/captures/<path:name>")
@@ -736,7 +786,14 @@ def api_captures():
 
 
 @socketio.on("connect")
-def on_connect():
+def on_connect(auth=None):
+    # Every socket handler sits behind this connect: rejecting here gates
+    # the whole handler set (tests/test_auth.py enumerates that set, so a
+    # new handler cannot slip past ungated).
+    if not _auth_policy.is_authenticated(
+        headers=request.headers, cookies=request.cookies, auth=auth
+    ):
+        return False
     with _state_lock:
         snapshot = _status_fields_locked()
     # Store I/O stays outside _state_lock (same rule as _emit_status): never
@@ -1197,9 +1254,19 @@ def main() -> None:
     # Bind localhost by default; containers set AETHERSCOPE_HOST=0.0.0.0 and
     # rely on `-p 127.0.0.1:8765:8765` (and a reverse proxy) for exposure.
     # The port is configurable via AETHERSCOPE_PORT (default 8765).
+    global _auth_policy
     host = os.environ.get("AETHERSCOPE_HOST", "127.0.0.1")
     port = resolve_port(os.environ.get("AETHERSCOPE_PORT"))
-    log.info("Aetherscope listening on http://%s:%d", host, port)
+    _auth_policy = AuthPolicy.from_env(os.environ, host=host)
+    try:
+        # Fail closed before any socket is bound: a non-loopback bind
+        # without a token would let anyone on the network drive the SDR.
+        _auth_policy.ensure_safe_startup()
+    except AuthConfigError as exc:
+        log.error("%s", exc)
+        raise SystemExit(str(exc)) from exc
+    log.info("Aetherscope listening on http://%s:%d (auth %s)", host, port,
+             "required" if _auth_policy.requires_auth else "not required: loopback, no token")
     try:
         seeded = get_store().seed_presets_once(int(time.time()), PRESETS)
         if seeded:
@@ -1223,6 +1290,9 @@ def main() -> None:
     except Exception:
         log.exception("Failed to read gps_enabled; leaving GPS off")
     _gps.start()
+    # allow_unsafe_werkzeug stays because Flask-SocketIO's threading mode
+    # serves through Werkzeug; the guard above is what makes that safe to
+    # expose: non-loopback binds cannot reach this line without a token.
     socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
 
 
