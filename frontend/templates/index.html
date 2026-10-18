@@ -388,11 +388,19 @@
       </div>
       <div class="diag-log" id="diag-log"><div class="event-empty">No warnings.</div></div>
       <div class="diag-gps">
-        <span class="diag-k">Geotag precision</span>
-        <select id="gps-precision" title="Coordinate precision stored in captures. The live map shows full precision.">
+        <span class="diag-k">Geotag precision (stored in captures)</span>
+        <select id="gps-precision" title="Coordinate precision stored in your capture files. This does not control what is broadcast live.">
           <option value="full">Full</option>
           <option value="100m">~100 m</option>
           <option value="1km">~1 km</option>
+        </select>
+      </div>
+      <div class="diag-gps">
+        <span class="diag-k">Live broadcast precision</span>
+        <select id="gps-broadcast-precision" title="Coordinate precision sent live to every connected browser. Full shares your exact location with anyone who can connect; ~1 km is the default.">
+          <option value="1km">~1 km (default)</option>
+          <option value="100m">~100 m</option>
+          <option value="full">Full — shares exact location live</option>
         </select>
       </div>
     </details>

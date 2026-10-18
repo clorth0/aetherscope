@@ -33,7 +33,7 @@ from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_basename, d
 from .catalogue import find_capture, list_catalogue
 from .config import DEMOD_ERROR, DEMODS
 from .contacts import SightingThrottle, adsb_sighting, ism_sighting
-from .gps import GpsClient, coarsen_geolocation
+from .gps import GpsClient, broadcast_geolocation, broadcast_position, coarsen_geolocation
 from .audio_record import start_recording, finalize_recording
 from .decoders import DecodeConfig, Rtl433Decoder
 from .device import probe_hackrf
@@ -62,7 +62,7 @@ PRESETS = [
 ]
 
 _SETTING_ALLOWLIST = {"last_mode", "last_radio_freq", "last_demod", "radio_volume",
-                      "gps_enabled", "gps_precision"}
+                      "gps_enabled", "gps_precision", "gps_broadcast_precision"}
 _BOOKMARK_SOURCE_ALLOWLIST = {"user", "mark", "seed"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -172,7 +172,38 @@ _device: dict = {"info": None, "checked_at": 0.0}
 # Optional GPS geotagging (opt-in, default off). AETHERSCOPE_GPS=0 hard-disables
 # it regardless of the stored toggle (deployments with no GPS).
 _GPS_FORCED_OFF = os.environ.get("AETHERSCOPE_GPS") == "0"
-_gps = GpsClient(on_status=lambda p: socketio.emit("gps_status", p))
+
+
+def _gps_broadcast_precision() -> str:
+    try:
+        return str(get_store().get_setting("gps_broadcast_precision", "1km"))
+    except Exception:
+        return "1km"
+
+
+def _broadcast_gps_position(position=None) -> dict:
+    """The one gps_status emission seam: broadcast precision, not stored."""
+    return broadcast_position(position if position is not None else _gps.position(),
+                              _gps_broadcast_precision())
+
+
+def _broadcast_geo(geo):
+    return broadcast_geolocation(geo, _gps_broadcast_precision())
+
+
+def _broadcast_contacts(rows):
+    """ISM rows carry receiver location; ADS-B rows carry the aircraft's."""
+    out = []
+    for row in rows:
+        row = dict(row)
+        if row.get("kind") == "ism" and row.get("lat") is not None:
+            geo = _broadcast_geo({"lat": row.get("lat"), "lon": row.get("lon")})
+            row["lat"], row["lon"] = geo["lat"], geo["lon"]
+        out.append(row)
+    return out
+
+
+_gps = GpsClient(on_status=lambda p: socketio.emit("gps_status", _broadcast_gps_position(p)))
 
 # Active WAV recording of radio audio (None when not recording). Guarded by
 # _state_lock; the recorder's own write() is thread-safe and a no-op after close.
@@ -232,7 +263,7 @@ _CONTACT_EMIT_DT = 3.0
 
 def _emit_contacts() -> None:
     try:
-        socketio.emit("contacts", {"data": get_store().list_contacts()})
+        socketio.emit("contacts", {"data": _broadcast_contacts(get_store().list_contacts())})
     except Exception:
         log.exception("emit contacts failed")
 
@@ -302,7 +333,7 @@ def _emit_device_status() -> None:
 
 
 def _emit_gps_status() -> None:
-    socketio.emit("gps_status", _gps.position())
+    socketio.emit("gps_status", _broadcast_gps_position())
 
 
 def _audio_status_snapshot() -> dict:
@@ -371,6 +402,8 @@ def _enriched_captures() -> list[dict]:
     items: list[dict] = []
     for entry in list_catalogue(CAPTURES_DIR):
         item = entry.to_dict()
+        if item.get("geolocation") is not None:
+            item["geolocation"] = _broadcast_geo(item["geolocation"])
         name = entry.name
         item["kind"] = entry.kind   # audio entries already carry kind="audio"
         ann = anns.get(name)
@@ -803,9 +836,9 @@ def on_connect(auth=None):
     snapshot["settings"] = get_store().all_settings()
     emit("status", snapshot)
     emit("device_status", {"info": _device["info"], "checked_at": _device["checked_at"]})
-    emit("gps_status", _gps.position())
+    emit("gps_status", _broadcast_gps_position())
     emit("audio_record_status", _audio_status_snapshot())
-    emit("contacts", {"data": get_store().list_contacts()})
+    emit("contacts", {"data": _broadcast_contacts(get_store().list_contacts())})
     emit("captures", {"items": _enriched_captures()})
 
 
@@ -1148,6 +1181,9 @@ def on_set_setting(data):
     except Exception as e:
         _emit_toast("error", str(e))
         return
+    if key == "gps_broadcast_precision":
+        _emit_gps_status()
+        _emit_captures_list()
     if key == "gps_enabled":
         want = bool(value) and not _GPS_FORCED_OFF
         _gps.set_enabled(want)
