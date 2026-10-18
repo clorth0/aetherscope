@@ -23,14 +23,14 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
-from flask import Flask, jsonify, make_response, redirect, render_template, request, send_from_directory
+from flask import Flask, abort, jsonify, make_response, redirect, render_template, request, send_file
 from flask_socketio import SocketIO, emit
 
 from .adsb import AdsbConfig, AdsbReceiver
 from .auth import COOKIE_MAX_AGE_S, COOKIE_NAME, AuthConfigError, AuthPolicy, render_gate
 from .adsb_enrich import icao_to_registration, icao_country
 from .capture import CaptureConfig, IqCapture, CAPTURES_DIR, capture_basename, delete_capture, list_captures, redact_location
-from .catalogue import find_capture, list_catalogue
+from .catalogue import find_capture, list_catalogue, resolve_capture_file, wire_capture_dict
 from .config import DEMOD_ERROR, DEMODS
 from .contacts import SightingThrottle, adsb_sighting, ism_sighting
 from .gps import GpsClient, broadcast_geolocation, broadcast_position, coarsen_geolocation
@@ -395,13 +395,14 @@ def _enriched_captures() -> list[dict]:
 
     Additive only: sigmf_name is the one server-added derived field —
     the SigMF companion name, derived once in backend/catalogue.py so
-    the frontend no longer re-derives it. Every other key (including
-    the absolute path, unchanged) is exactly the sidecar's own.
+    the frontend no longer re-derives it. The wire shape drops the
+    sidecar's absolute ``path``/``sidecar`` (see catalogue.to_wire_dict);
+    every other key is exactly the sidecar's own.
     """
     anns = get_store().list_capture_annotations()  # one query, dict lookup per item
     items: list[dict] = []
     for entry in list_catalogue(CAPTURES_DIR):
-        item = entry.to_dict()
+        item = entry.to_wire_dict()
         if item.get("geolocation") is not None:
             item["geolocation"] = _broadcast_geo(item["geolocation"])
         name = entry.name
@@ -580,10 +581,10 @@ def _start_capture(cfg: CaptureConfig) -> bool:
     return _launcher.launch(LaunchSpec(
         "capture", build,
         done_finish("capture_done",
-                    lambda extra, reason: {"record": asdict(extra[0]), "reason": reason},
+                    lambda extra, reason: {"record": wire_capture_dict(asdict(extra[0])), "reason": reason},
                     toast_for=_capture_toast, toast_before_event=True,
                     refresh_captures=True),
-        started=lambda worker: [("emit", "capture_started", {"record": asdict(worker.record)})],
+        started=lambda worker: [("emit", "capture_started", {"record": wire_capture_dict(asdict(worker.record))})],
     ))
 
 
@@ -808,9 +809,14 @@ def auth_token():
     return resp
 
 
-@app.route("/captures/<path:name>")
+@app.route("/captures/<path:name>", merge_slashes=False)
 def serve_capture(name: str):
-    return send_from_directory(CAPTURES_DIR, name, as_attachment=True)
+    # Serve the capture UI's files only: catalogue owns name->path and
+    # proves the resolved file stays inside the captures directory.
+    path = resolve_capture_file(name, CAPTURES_DIR)
+    if path is None:
+        abort(404)
+    return send_file(path, as_attachment=True)
 
 
 @app.route("/api/captures")
