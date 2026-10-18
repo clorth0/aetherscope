@@ -17,8 +17,17 @@ Invariants callers may rely on:
   ``sample_rate`` is an int (2_000_000 when absent) — the defaults the
   replay/play/decode start functions used to re-derive per call site.
 - ``to_dict()`` reproduces the sidecar dict exactly (same keys, same
-  order), so JSON/socket payloads keep their shape. ``geolocation_redacted``
+  order), so the on-disk shape is preserved. ``geolocation_redacted``
   round-trips only when the sidecar actually carries it.
+- ``to_wire_dict()`` / ``wire_capture_dict()`` are the only shapes that
+  cross to a client: they drop the absolute ``path``/``sidecar``
+  filesystem locations (the frontend builds download/play URLs from
+  ``name``/``sigmf_name``, never those fields). Server code keeps using
+  the typed entry's ``path`` internally.
+- ``resolve_capture_file()`` is the one name->path resolution for
+  serving a capture file: flat capture names only, and the resolved
+  file must stay directly inside the captures directory (symlink
+  escapes included), or there is no file to serve.
 - The SigMF companion name is derived here and only here
   (``sigmf_meta_name`` / ``entry.sigmf_name``); the frontend consumes the
   server-provided ``sigmf_name`` instead of deriving it again.
@@ -41,6 +50,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 CAPTURES_DIR = Path(os.environ.get("AETHERSCOPE_CAPTURES_DIR") or (_REPO_ROOT / "captures"))
 
 _CAPTURE_SUFFIXES = (".iq", ".wav", ".json", ".sigmf-meta")
+_SERVED_SUFFIXES = (".iq", ".wav", ".sigmf-meta")
 _DEFAULT_SAMPLE_RATE = 2_000_000
 
 
@@ -98,6 +108,14 @@ def _as_float(value, default: float) -> float:
         return default
 
 
+_WIRE_PATH_FIELDS = ("path", "sidecar")
+
+
+def wire_capture_dict(data: dict) -> dict:
+    """A capture dict safe to send to a client: no absolute fs paths."""
+    return {k: v for k, v in data.items() if k not in _WIRE_PATH_FIELDS}
+
+
 class _Entry:
     """Behaviour both capture shapes share; not itself a capture shape."""
 
@@ -112,6 +130,9 @@ class _Entry:
     @property
     def exists(self) -> bool:
         return bool(self.path) and Path(self.path).exists()
+
+    def to_wire_dict(self) -> dict:
+        return wire_capture_dict(self.to_dict())
 
     def missing_in(self, captures_dir) -> bool:
         return not (Path(captures_dir) / self.name).exists() if self.name else True
@@ -252,6 +273,27 @@ def list_catalogue(captures_dir=None) -> list[CaptureEntry]:
 def find_capture(name: str, captures_dir=None) -> CaptureEntry | None:
     """One typed capture by exact filename, or None."""
     return next((e for e in list_catalogue(captures_dir) if e.name == name), None)
+
+
+def resolve_capture_file(name: str, captures_dir=None) -> Path | None:
+    """Resolve a client-supplied capture name to a file to serve, or None.
+
+    Only flat names in a served capture form (``<base>.iq/.wav/
+    .sigmf-meta``; the ``.json`` sidecar is internal and itself embeds
+    absolute paths, so it is never served) are accepted, and the fully resolved file must sit
+    directly inside the captures directory -- so ``../``, absolute,
+    encoded-separator (already decoded by Flask routing), nested, and
+    symlink escapes all resolve to None (the route answers 404).
+    """
+    if not isinstance(name, str) or not name or "/" in name or "\\" in name:
+        return None
+    if capture_basename(name) is None or not name.endswith(_SERVED_SUFFIXES):
+        return None
+    root = _dir(captures_dir).resolve()
+    candidate = (root / name).resolve()
+    if candidate.parent != root or not candidate.is_file():
+        return None
+    return candidate
 
 
 def redact_location(name: str, captures_dir=None) -> bool:

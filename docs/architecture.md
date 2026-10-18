@@ -79,7 +79,12 @@
   listing/lookup/delete/redact. Callers get a capture ready to replay,
   play, or decode; the raw sidecar dict crosses no seam. Its `to_dict()`
   reproduces the sidecar exactly; the only server-added field in the
-  enriched list is the derived `sigmf_name`.
+  enriched list is the derived `sigmf_name`. Client payloads use its
+  wire shape (`to_wire_dict`/`wire_capture_dict`), which drops the
+  absolute `path`/`sidecar` — the browser downloads/plays by
+  `name`/`sigmf_name` — and `resolve_capture_file` is the one
+  name->path resolution for serving a file: flat capture names whose
+  resolved file stays directly inside the captures directory.
 - **Mode-config knowledge.** Field lists have exactly one authoritative
   home per side and no code generation joins them: Python dataclasses
   (`SweepConfig`, `DecodeConfig`, `CaptureConfig`, `AdsbConfig`,

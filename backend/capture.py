@@ -181,8 +181,8 @@ class IqCapture(WorkerLifecycle):
 
 
 def list_captures() -> list[dict]:
-    """Return all captures in CAPTURES_DIR, newest first (catalogue dicts)."""
-    return [entry.to_dict() for entry in list_catalogue(CAPTURES_DIR)]
+    """All captures for a client, newest first (wire dicts: no fs paths)."""
+    return [entry.to_wire_dict() for entry in list_catalogue(CAPTURES_DIR)]
 
 
 def _write_sigmf(record: "CaptureRecord") -> None:
